@@ -5,10 +5,23 @@ use std::{path::Path, path::PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub async fn copy(source: &Path, destination: &Path, style: ProgressBarStyle) -> io::Result<()> {
-    let metadata = tokio::fs::metadata(source).await?;
-    let pb = ProgressBar::new(metadata.len());
+    let metadata_src = tokio::fs::metadata(source).await?;
+    let metadata_dest = tokio::fs::metadata(destination).await.ok();
+    let pb = ProgressBar::new(metadata_src.len());
     style.apply(&pb);
-    do_copy(source, destination, &pb).await
+    if let Some(metadata_dest) = metadata_dest {
+        if metadata_dest.is_dir() {
+            let file_name = source.file_name().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "Invalid source path")
+            })?;
+            let dest_path = destination.join(file_name);
+            do_copy(source, &dest_path, &pb).await
+        } else {
+            do_copy(source, destination, &pb).await
+        }
+    } else {
+        do_copy(source, destination, &pb).await
+    }
 }
 
 pub async fn do_copy(source: &Path, destination: &Path, pb: &ProgressBar) -> io::Result<()> {
