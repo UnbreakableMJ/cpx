@@ -10,4 +10,14 @@ pub struct CLIArgs {
 
     #[arg(short, long, help = "Progress bar style: default, minimal, detailed")]
     pub style: Option<String>,
+
+    #[arg(short, long, help = "Copy directories recursively")]
+    pub recursive: bool,
+
+    #[arg(
+        short = 'j',
+        default_value_t = 4,
+        help = "Number of concurrent copy operations for multiple files"
+    )]
+    pub concurrency: usize,
 }

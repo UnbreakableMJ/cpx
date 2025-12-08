@@ -1,10 +1,7 @@
-mod cli;
-mod core;
-
-use crate::cli::args::CLIArgs;
-use crate::core::copy::{copy, multiple_copy};
-use crate::core::progress_bar::ProgressBarStyle;
 use clap::Parser;
+use cpx::cli::args::CLIArgs;
+use cpx::core::copy::{copy, multiple_copy};
+use cpx::style::progress_bar::ProgressBarStyle;
 
 #[tokio::main]
 async fn main() {
@@ -15,9 +12,16 @@ async fn main() {
         _ => ProgressBarStyle::Default,
     };
     let result = if args.sources.len() == 1 {
-        copy(&args.sources[0], &args.destination, style).await
+        copy(
+            &args.sources[0],
+            &args.destination,
+            style,
+            args.recursive,
+            args.concurrency,
+        )
+        .await
     } else {
-        multiple_copy(args.sources, args.destination, style).await
+        multiple_copy(args.sources, args.destination, style, args.concurrency).await
     };
     match result {
         Ok(_) => println!("File copied successfully."),
