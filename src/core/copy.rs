@@ -1,8 +1,8 @@
 use crate::style::progress_bar::ProgressBarStyle;
 use indicatif::{MultiProgress, ProgressBar};
-use std::io;
+use std::io::{self};
 use std::{path::Path, path::PathBuf};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -65,10 +65,13 @@ pub async fn copy(
 
 pub async fn do_copy(source: &Path, destination: &Path, pb: &ProgressBar) -> io::Result<()> {
     let result = async {
-        let mut src_file = tokio::fs::File::open(source).await?;
-        let mut dest_file = tokio::fs::File::create(destination).await?;
+        let src_file = tokio::fs::File::open(source).await?;
+        let dest_file = tokio::fs::File::create(destination).await?;
 
-        const BUFFER_SIZE: usize = 65536;
+        let mut src_file = BufReader::new(src_file);
+        let mut dest_file = BufWriter::new(dest_file);
+
+        const BUFFER_SIZE: usize = 512 * 1024;
         let mut buffer = vec![0u8; BUFFER_SIZE];
 
         loop {
@@ -79,12 +82,13 @@ pub async fn do_copy(source: &Path, destination: &Path, pb: &ProgressBar) -> io:
             dest_file.write_all(&buffer[..bytes_read]).await?;
             pb.inc(bytes_read as u64);
         }
+        dest_file.flush().await?;
         Ok(())
     }
     .await;
 
     match &result {
-        Ok(_) => pb.finish_with_message("Copy complete"),
+        Ok(_) => (),
         Err(_) => pb.abandon_with_message("Copy failed"),
     }
 
