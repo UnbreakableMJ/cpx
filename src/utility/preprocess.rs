@@ -82,6 +82,14 @@ async fn should_skip_file(source: &Path, destination: &Path) -> io::Result<bool>
     if dest_metadata.len() != src_metadata.len() {
         return Ok(false);
     }
+
+    if let (Ok(src_modified), Ok(dest_modified)) = 
+        (src_metadata.modified(), dest_metadata.modified()) {
+        if src_modified <= dest_modified {
+            return Ok(true); 
+        }
+    }
+    
     let src_checksum = calculate_checksum(source).await?;
     let dest_checksum = calculate_checksum(destination).await?;
 
