@@ -20,6 +20,7 @@ async fn main() {
             args.concurrency,
             args.continue_copy,
             args.force,
+            args.interactive,
         )
         .await
     } else {
@@ -30,11 +31,12 @@ async fn main() {
             args.concurrency,
             args.continue_copy,
             args.force,
+            args.interactive,
         )
         .await
     };
     match result {
-        Ok(_) => println!("File copied successfully."),
+        Ok(_) => (),
         Err(e) => eprintln!("Error copying file: {}", e),
     }
 }

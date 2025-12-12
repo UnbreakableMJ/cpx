@@ -34,4 +34,7 @@ pub struct CLIArgs {
         help = "if an existing destination file cannot be opened, remove it and try again"
     )]
     pub force: bool,
+
+    #[arg(short = 'i', long, help = "prompt before overwrite")]
+    pub interactive: bool,
 }
