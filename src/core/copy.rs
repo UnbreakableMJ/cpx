@@ -30,16 +30,22 @@ pub async fn copy(
             ));
         }
 
-        if let Ok(dest_meta) = tokio::fs::metadata(destination).await {
+        let final_destination = if let Ok(dest_meta) = tokio::fs::metadata(destination).await {
             if dest_meta.is_file() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!("'{}' is a file, expected directory", destination.display()),
                 ));
             }
-        }
+            let dir_name = source.file_name().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "Invalid source directory name")
+            })?;
+            destination.join(dir_name)
+        } else {
+            destination.to_path_buf()
+        };
 
-        preprocess_directory(source, destination, options.resume).await?
+        preprocess_directory(source, &final_destination, options.resume).await?
     } else {
         preprocess_file(source, destination, options.resume).await?
     };
