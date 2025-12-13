@@ -24,3 +24,86 @@ pub fn with_parents(dest: &Path, source: &Path) -> PathBuf {
 
     dest.join(relative)
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_with_parents_relative_path() {
+        let dest = Path::new("/dest");
+        let source = Path::new("a/b/file.txt");
+
+        let result = with_parents(dest, source);
+        assert_eq!(result, PathBuf::from("/dest/a/b/file.txt"));
+    }
+
+    #[test]
+    fn test_with_parents_absolute_path_unix() {
+        #[cfg(unix)]
+        {
+            let dest = Path::new("/dest");
+            let source = Path::new("/home/user/file.txt");
+
+            let result = with_parents(dest, source);
+            assert_eq!(result, PathBuf::from("/dest/home/user/file.txt"));
+        }
+    }
+
+    #[test]
+    fn test_with_parents_single_file() {
+        let dest = Path::new("/dest");
+        let source = Path::new("file.txt");
+
+        let result = with_parents(dest, source);
+        assert_eq!(result, PathBuf::from("/dest/file.txt"));
+    }
+
+    #[test]
+    fn test_with_parents_nested_path() {
+        let dest = Path::new("/backup");
+        let source = Path::new("projects/rust/cpx/src/main.rs");
+
+        let result = with_parents(dest, source);
+        assert_eq!(result, PathBuf::from("/backup/projects/rust/cpx/src/main.rs"));
+    }
+
+    #[test]
+    fn test_with_parents_dest_with_trailing_slash() {
+        let dest = Path::new("/dest/");
+        let source = Path::new("a/b/file.txt");
+
+        let result = with_parents(dest, source);
+        assert_eq!(result, PathBuf::from("/dest/a/b/file.txt"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_with_parents_root_in_source() {
+        let dest = Path::new("/backup");
+        let source = Path::new("/etc/config/app.conf");
+
+        let result = with_parents(dest, source);
+        assert_eq!(result, PathBuf::from("/backup/etc/config/app.conf"));
+    }
+
+    #[test]
+    fn test_with_parents_current_dir() {
+        let dest = Path::new("/dest");
+        let source = Path::new("./file.txt");
+
+        let result = with_parents(dest, source);
+        assert!(result.to_string_lossy().ends_with("file.txt"));
+    }
+
+    #[test]
+    fn test_with_parents_empty_dest() {
+        let dest = Path::new("");
+        let source = Path::new("a/b/file.txt");
+
+        let result = with_parents(dest, source);
+        assert_eq!(result, PathBuf::from("a/b/file.txt"));
+    }
+}

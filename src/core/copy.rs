@@ -45,8 +45,8 @@ pub async fn copy(
     };
     if plan.skipped_files > 0 {
         eprintln!(
-            "Skipping {} files ({} bytes) that already exist",
-            plan.skipped_files, plan.skipped_size
+            "Skipping {} files that already exist",
+            plan.skipped_files
         );
     }
 

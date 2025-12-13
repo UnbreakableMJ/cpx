@@ -250,3 +250,238 @@ pub async fn preprocess_multiple(
     plan.sort_by_size_desc();
     Ok(plan)
 }
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    async fn create_test_file(path: &Path, content: &[u8]) -> io::Result<()> {
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(path, content).await
+    }
+
+    #[tokio::test]
+    async fn test_calculate_checksum_same_content() {
+        let temp_dir = TempDir::new().unwrap();
+        let file1 = temp_dir.path().join("file1.txt");
+        let file2 = temp_dir.path().join("file2.txt");
+
+        let content = b"Hello, World!";
+        create_test_file(&file1, content).await.unwrap();
+        create_test_file(&file2, content).await.unwrap();
+
+        let hash1 = calculate_checksum(&file1).await.unwrap();
+        let hash2 = calculate_checksum(&file2).await.unwrap();
+
+        assert_eq!(hash1, hash2);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_checksum_different_content() {
+        let temp_dir = TempDir::new().unwrap();
+        let file1 = temp_dir.path().join("file1.txt");
+        let file2 = temp_dir.path().join("file2.txt");
+
+        create_test_file(&file1, b"Hello").await.unwrap();
+        create_test_file(&file2, b"World").await.unwrap();
+
+        let hash1 = calculate_checksum(&file1).await.unwrap();
+        let hash2 = calculate_checksum(&file2).await.unwrap();
+
+        assert_ne!(hash1, hash2);
+    }
+
+    #[tokio::test]
+    async fn test_should_skip_file_identical() {
+        let temp_dir = TempDir::new().unwrap();
+        let source = temp_dir.path().join("source.txt");
+        let dest = temp_dir.path().join("dest.txt");
+
+        let content = b"test content";
+        create_test_file(&source, content).await.unwrap();
+        create_test_file(&dest, content).await.unwrap();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        tokio::fs::write(&dest, content).await.unwrap();
+
+        let should_skip = should_skip_file(&source, &dest).await.unwrap();
+        assert!(should_skip, "Should skip identical file with newer mtime");
+    }
+
+    #[tokio::test]
+    async fn test_should_skip_file_different_content() {
+        let temp_dir = TempDir::new().unwrap();
+        let source = temp_dir.path().join("source.txt");
+        let dest = temp_dir.path().join("dest.txt");
+
+        create_test_file(&source, b"source content").await.unwrap();
+        create_test_file(&dest, b"different content").await.unwrap();
+
+        let should_skip = should_skip_file(&source, &dest).await.unwrap();
+        assert!(!should_skip, "Should not skip files with different content");
+    }
+
+    #[tokio::test]
+    async fn test_should_skip_file_dest_not_exists() {
+        let temp_dir = TempDir::new().unwrap();
+        let source = temp_dir.path().join("source.txt");
+        let dest = temp_dir.path().join("dest.txt");
+
+        create_test_file(&source, b"content").await.unwrap();
+
+        let should_skip = should_skip_file(&source, &dest).await.unwrap();
+        assert!(!should_skip, "Should not skip when dest doesn't exist");
+    }
+
+    #[tokio::test]
+    async fn test_preprocess_file_single() {
+        let temp_dir = TempDir::new().unwrap();
+        let source = temp_dir.path().join("source.txt");
+        let dest = temp_dir.path().join("dest.txt");
+
+        create_test_file(&source, b"test").await.unwrap();
+
+        let plan = preprocess_file(&source, &dest, false, false)
+            .await
+            .unwrap();
+
+        assert_eq!(plan.total_files, 1);
+        assert_eq!(plan.files.len(), 1);
+        assert_eq!(plan.files[0].source, source);
+        assert_eq!(plan.files[0].destination, dest);
+    }
+
+    #[tokio::test]
+    async fn test_preprocess_file_with_resume_skip() {
+        let temp_dir = TempDir::new().unwrap();
+        let source = temp_dir.path().join("source.txt");
+        let dest = temp_dir.path().join("dest.txt");
+
+        let content = b"test content";
+        create_test_file(&source, content).await.unwrap();
+        create_test_file(&dest, content).await.unwrap();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        tokio::fs::write(&dest, content).await.unwrap();
+
+        let plan = preprocess_file(&source, &dest, true, false)
+            .await
+            .unwrap();
+
+        assert_eq!(plan.total_files, 0);
+        assert_eq!(plan.skipped_files, 1);
+        assert_eq!(plan.files.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_preprocess_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let source_dir = temp_dir.path().join("source");
+        let dest_dir = temp_dir.path().join("dest");
+
+        tokio::fs::create_dir_all(&source_dir).await.unwrap();
+        create_test_file(&source_dir.join("file1.txt"), b"content1")
+            .await
+            .unwrap();
+        create_test_file(&source_dir.join("file2.txt"), b"content2")
+            .await
+            .unwrap();
+
+        let subdir = source_dir.join("subdir");
+        tokio::fs::create_dir_all(&subdir).await.unwrap();
+        create_test_file(&subdir.join("file3.txt"), b"content3")
+            .await
+            .unwrap();
+
+        let plan = preprocess_directory(&source_dir, &dest_dir, false, false)
+            .await
+            .unwrap();
+
+        assert_eq!(plan.total_files, 3);
+        assert!(plan.directories.len() >= 2); 
+    }
+
+    #[tokio::test]
+    async fn test_preprocess_multiple_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let dest_dir = temp_dir.path().join("dest");
+        tokio::fs::create_dir_all(&dest_dir).await.unwrap();
+
+        let file1 = temp_dir.path().join("file1.txt");
+        let file2 = temp_dir.path().join("file2.txt");
+
+        create_test_file(&file1, b"content1").await.unwrap();
+        create_test_file(&file2, b"content2").await.unwrap();
+
+        let sources = vec![file1.clone(), file2.clone()];
+        let plan = preprocess_multiple(&sources, &dest_dir, false, false)
+            .await
+            .unwrap();
+
+        assert_eq!(plan.total_files, 2);
+        assert_eq!(plan.files.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_preprocess_multiple_with_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let dest_dir = temp_dir.path().join("dest");
+        tokio::fs::create_dir_all(&dest_dir).await.unwrap();
+
+        let file1 = temp_dir.path().join("file1.txt");
+        let source_dir = temp_dir.path().join("source");
+        tokio::fs::create_dir_all(&source_dir).await.unwrap();
+
+        create_test_file(&file1, b"content1").await.unwrap();
+        create_test_file(&source_dir.join("file2.txt"), b"content2")
+            .await
+            .unwrap();
+
+        let sources = vec![file1, source_dir];
+        let plan = preprocess_multiple(&sources, &dest_dir, false, false)
+            .await
+            .unwrap();
+
+        assert_eq!(plan.total_files, 2);
+    }
+
+    #[tokio::test]
+    async fn test_copy_plan_sort_by_size() {
+        let mut plan = CopyPlan::new();
+
+        plan.add_file(PathBuf::from("small.txt"), PathBuf::from("dest1"), 100);
+        plan.add_file(PathBuf::from("large.txt"), PathBuf::from("dest2"), 1000);
+        plan.add_file(PathBuf::from("medium.txt"), PathBuf::from("dest3"), 500);
+
+        plan.sort_by_size_desc();
+
+        assert_eq!(plan.files[0].size, 1000);
+        assert_eq!(plan.files[1].size, 500);
+        assert_eq!(plan.files[2].size, 100);
+    }
+
+    #[tokio::test]
+    async fn test_preprocess_file_with_parents() {
+        let temp_dir = TempDir::new().unwrap();
+        let source = temp_dir.path().join("subdir").join("file.txt");
+        let dest_dir = temp_dir.path().join("dest");
+
+        tokio::fs::create_dir_all(&dest_dir).await.unwrap();
+        create_test_file(&source, b"content").await.unwrap();
+
+        let plan = preprocess_file(&source, &dest_dir, false, true)
+            .await
+            .unwrap();
+
+        assert_eq!(plan.total_files, 1);
+        assert!(plan.files[0]
+            .destination
+            .to_string_lossy()
+            .contains("subdir"));
+    }
+}
