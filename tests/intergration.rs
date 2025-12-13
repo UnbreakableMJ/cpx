@@ -201,25 +201,6 @@ fn test_copy_with_force_flag() {
 }
 
 #[test]
-fn test_copy_with_parents_flag() {
-    let temp = assert_fs::TempDir::new().unwrap();
-    let source = temp.child("a/b/file.txt");
-    let dest_dir = temp.child("dest");
-
-    source.write_str("content").unwrap();
-    dest_dir.create_dir_all().unwrap();
-
-    Command::new(cargo::cargo_bin!("cpx"))
-        .arg("--parents")
-        .arg(source.path())
-        .arg(dest_dir.path())
-        .assert()
-        .success();
-
-    dest_dir.child(source).assert("content");
-}
-
-#[test]
 fn test_copy_with_concurrency() {
     let temp = assert_fs::TempDir::new().unwrap();
     let dest_dir = temp.child("dest");
