@@ -25,7 +25,6 @@ pub fn with_parents(dest: &Path, source: &Path) -> PathBuf {
     dest.join(relative)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,7 +66,10 @@ mod tests {
         let source = Path::new("projects/rust/cpx/src/main.rs");
 
         let result = with_parents(dest, source);
-        assert_eq!(result, PathBuf::from("/backup/projects/rust/cpx/src/main.rs"));
+        assert_eq!(
+            result,
+            PathBuf::from("/backup/projects/rust/cpx/src/main.rs")
+        );
     }
 
     #[test]

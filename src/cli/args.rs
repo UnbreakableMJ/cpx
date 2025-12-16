@@ -1,3 +1,4 @@
+use crate::utility::preserve::PreserveAttr;
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -49,6 +50,15 @@ pub struct CLIArgs {
 
     #[arg(long, help = "use full source file name under DIRECTORY")]
     pub parents: bool,
+
+    #[arg(
+        short = 'p',
+        long = "preserve",
+        value_name = "ATTR_LIST",
+        default_missing_value = "",
+        help = "preserve the specified attributes"
+    )]
+    pub preserve: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -59,6 +69,7 @@ pub struct CopyOptions {
     pub force: bool,
     pub interactive: bool,
     pub parents: bool,
+    pub preserve: PreserveAttr,
 }
 
 impl From<&CLIArgs> for CopyOptions {
@@ -70,6 +81,12 @@ impl From<&CLIArgs> for CopyOptions {
             force: cli.force,
             interactive: cli.interactive,
             parents: cli.parents,
+            preserve: match &cli.preserve {
+                None => PreserveAttr::none(),
+                Some(s) => {
+                    PreserveAttr::from_string(s).expect("unable to parse preserve attribute")
+                }
+            },
         }
     }
 }

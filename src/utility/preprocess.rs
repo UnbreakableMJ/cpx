@@ -251,8 +251,6 @@ pub async fn preprocess_multiple(
     Ok(plan)
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,9 +344,7 @@ mod tests {
 
         create_test_file(&source, b"test").await.unwrap();
 
-        let plan = preprocess_file(&source, &dest, false, false)
-            .await
-            .unwrap();
+        let plan = preprocess_file(&source, &dest, false, false).await.unwrap();
 
         assert_eq!(plan.total_files, 1);
         assert_eq!(plan.files.len(), 1);
@@ -369,9 +365,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         tokio::fs::write(&dest, content).await.unwrap();
 
-        let plan = preprocess_file(&source, &dest, true, false)
-            .await
-            .unwrap();
+        let plan = preprocess_file(&source, &dest, true, false).await.unwrap();
 
         assert_eq!(plan.total_files, 0);
         assert_eq!(plan.skipped_files, 1);
@@ -403,7 +397,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(plan.total_files, 3);
-        assert!(plan.directories.len() >= 2); 
+        assert!(plan.directories.len() >= 2);
     }
 
     #[tokio::test]
@@ -479,9 +473,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(plan.total_files, 1);
-        assert!(plan.files[0]
-            .destination
-            .to_string_lossy()
-            .contains("subdir"));
+        assert!(
+            plan.files[0]
+                .destination
+                .to_string_lossy()
+                .contains("subdir")
+        );
     }
 }

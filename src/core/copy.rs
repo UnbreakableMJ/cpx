@@ -44,10 +44,7 @@ pub async fn copy(
         preprocess_file(source, destination, options.resume, options.parents).await?
     };
     if plan.skipped_files > 0 {
-        eprintln!(
-            "Skipping {} files that already exist",
-            plan.skipped_files
-        );
+        eprintln!("Skipping {} files that already exist", plan.skipped_files);
     }
 
     execute_copy(plan, style, options).await

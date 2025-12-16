@@ -154,11 +154,11 @@ fn test_copy_with_resume_flag() {
     let dest = dest_dir.child("source.txt");
 
     source.write_str("Same content").unwrap();
-    
+
     dest_dir.create_dir_all().unwrap();
-    
+
     std::thread::sleep(std::time::Duration::from_millis(100));
-    
+
     dest.write_str("Same content").unwrap();
 
     Command::new(cargo::cargo_bin!("cpx"))

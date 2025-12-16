@@ -24,9 +24,9 @@ async fn main() {
     } else {
         multiple_copy(sources, destination, style, &options).await
     };
-    
+
     if let Err(e) = result {
-        eprintln!("Error copying file: {}", e);  
-        process::exit(1);  
+        eprintln!("Error copying file: {}", e);
+        process::exit(1);
     }
 }
