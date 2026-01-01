@@ -10,11 +10,11 @@ impl ProgressBarStyle {
     pub fn apply(&self, pb: &ProgressBar) {
         let style = match self {
             ProgressBarStyle::Minimal => ProgressStyle::default_bar()
-                .template("{spinner} {msg:20} [{bar:60}] {percent:>3}%")
+                .template("{spinner} {msg:20} [{bar:65}] {percent:>3}%")
                 .unwrap()
                 .progress_chars("━╾─"),
             ProgressBarStyle::Default => ProgressStyle::default_bar()
-                .template("{spinner} {msg:20} [{bar:60}] {binary_bytes:>5}/{binary_total_bytes:<5} • {binary_bytes_per_sec:>5}")
+                .template("{spinner} {msg:20} [{bar:65}] {binary_bytes:>5}/{binary_total_bytes:<5} • {binary_bytes_per_sec:>5}")
                 .unwrap()
                 .progress_chars("━╾─"),
         };
