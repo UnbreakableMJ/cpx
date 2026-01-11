@@ -1,5 +1,28 @@
+use futures::stream::{self, StreamExt};
 use std::path::{Path, PathBuf};
 use tokio::io;
+
+pub async fn create_directories_parallel(
+    dirs: &[crate::utility::preprocess::DirectoryTask],
+) -> io::Result<()> {
+    stream::iter(dirs)
+        .map(|dir| async {
+            tokio::fs::create_dir_all(&dir.destination)
+                .await
+                .or_else(|e| {
+                    if e.kind() == io::ErrorKind::AlreadyExists {
+                        Ok(())
+                    } else {
+                        Err(e)
+                    }
+                })
+        })
+        .buffer_unordered(32)
+        .collect::<Vec<_>>()
+        .await;
+
+    Ok(())
+}
 
 pub fn prompt_overwrite(path: &Path) -> io::Result<bool> {
     use std::io::{Write, stdin, stdout};

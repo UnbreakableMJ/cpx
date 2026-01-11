@@ -1,10 +1,11 @@
 use crate::cli::args::CopyOptions;
-use crate::utility::helper::prompt_overwrite;
+use crate::utility::helper::{create_directories_parallel, prompt_overwrite};
 use crate::utility::preprocess::{
     CopyPlan, preprocess_directory, preprocess_file, preprocess_multiple,
 };
 use crate::utility::preserve::{self, PreserveAttr};
 use crate::utility::progress_bar::ProgressBarStyle;
+use futures::stream::{FuturesUnordered, StreamExt};
 use indicatif::ProgressBar;
 use std::io::{self};
 use std::sync::Arc;
@@ -12,7 +13,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{path::Path, path::PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
-
 pub async fn copy(
     source: &Path,
     destination: &Path,
@@ -71,13 +71,7 @@ async fn execute_copy(
     options: &CopyOptions,
 ) -> io::Result<()> {
     if !options.attributes_only {
-        for dir in &plan.directories {
-            if let Err(e) = tokio::fs::create_dir_all(&dir.destination).await {
-                if e.kind() != io::ErrorKind::AlreadyExists {
-                    return Err(e);
-                }
-            }
-        }
+        create_directories_parallel(&plan.directories).await?;
     } else {
         for dir_task in &plan.directories {
             if let Some(src) = &dir_task.source {
@@ -106,7 +100,7 @@ async fn execute_copy(
     };
     let completed_files = Arc::new(AtomicUsize::new(0));
     let semaphore = Arc::new(Semaphore::new(concurrency));
-    let mut tasks = Vec::new();
+    let mut tasks = FuturesUnordered::new();
 
     for file_task in plan.files {
         let sem = semaphore.clone();
@@ -116,7 +110,7 @@ async fn execute_copy(
         let completed = completed_files.clone();
         let total_files = plan.total_files;
 
-        let task = tokio::spawn(async move {
+        tasks.push(tokio::spawn(async move {
             let _permit = sem
                 .acquire()
                 .await
@@ -135,18 +129,18 @@ async fn execute_copy(
             .await;
 
             result
-        });
-
-        tasks.push(task);
+        }));
     }
 
     let mut errors = Vec::new();
-    for (i, task) in tasks.into_iter().enumerate() {
-        match task.await {
+    let mut index = 0;
+    while let Some(result) = tasks.next().await {
+        match result {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => errors.push(format!("File {}: {}", i, e)),
-            Err(e) => errors.push(format!("Task {}: {}", i, e)),
+            Ok(Err(e)) => errors.push(format!("File {}: {}", index, e)),
+            Err(e) => errors.push(format!("Task {}: {}", index, e)),
         }
+        index += 1;
     }
 
     if let Some(pb) = overall_pb {
