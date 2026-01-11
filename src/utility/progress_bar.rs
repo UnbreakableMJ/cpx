@@ -7,18 +7,28 @@ pub enum ProgressBarStyle {
 }
 
 impl ProgressBarStyle {
-    pub fn apply(&self, pb: &ProgressBar) {
+    pub fn apply(&self, pb: &ProgressBar, total_files: usize) {
         let style = match self {
             ProgressBarStyle::Minimal => ProgressStyle::default_bar()
-                .template("{spinner} {msg:20} [{bar:65}] {percent:>3}%")
+                .template("{msg} {percent}% |{wide_bar}| ETA:{eta_precise}")
                 .unwrap()
-                .progress_chars("━╾─"),
+                .progress_chars("▓░ "),
+
             ProgressBarStyle::Default => ProgressStyle::default_bar()
-                .template("{spinner} {msg:20} [{bar:65}] {binary_bytes:>5}/{binary_total_bytes:<5} • {binary_bytes_per_sec:>5}")
+                .template(
+                    "{msg} [{wide_bar}] {percent:>3}% | \
+                         {binary_bytes}/{binary_total_bytes} | ETA:{eta_precise}",
+                )
                 .unwrap()
-                .progress_chars("━╾─"),
+                .progress_chars("=> "),
         };
+
         pb.set_style(style);
+        if matches!(self, ProgressBarStyle::Default) {
+            pb.set_message(format!("Copying: 0/{} files", total_files));
+        } else {
+            pb.set_message("Copying");
+        }
     }
 }
 
@@ -26,16 +36,4 @@ impl Default for ProgressBarStyle {
     fn default() -> Self {
         ProgressBarStyle::Default
     }
-}
-
-pub fn apply_overall(pb: &ProgressBar) {
-    let style = ProgressStyle::default_spinner()
-        .template(
-            "{msg} \
-             • {binary_bytes:>5}/{binary_total_bytes:<5} \
-             • ETA {eta_precise} \n",
-        )
-        .unwrap();
-
-    pb.set_style(style);
 }

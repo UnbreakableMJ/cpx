@@ -1,16 +1,18 @@
 use crate::cli::args::CopyOptions;
-use crate::utility::helper::{prompt_overwrite, truncate_filename};
+use crate::utility::helper::prompt_overwrite;
 use crate::utility::preprocess::{
     CopyPlan, preprocess_directory, preprocess_file, preprocess_multiple,
 };
 use crate::utility::preserve::{self, PreserveAttr};
-use crate::utility::progress_bar::{ProgressBarStyle, apply_overall};
-use indicatif::{MultiProgress, ProgressBar};
+use crate::utility::progress_bar::ProgressBarStyle;
+use indicatif::ProgressBar;
 use std::io::{self};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{path::Path, path::PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
+
 pub async fn copy(
     source: &Path,
     destination: &Path,
@@ -76,12 +78,10 @@ async fn execute_copy(
         }
     }
 
-    let multi_progress = MultiProgress::new();
     let overall_pb = if plan.total_files >= 1 && !options.interactive {
-        let pb = multi_progress.add(ProgressBar::new(plan.total_size));
-        pb.set_message(format!("Copying {} files", plan.total_files));
-        apply_overall(&pb);
-        Some(pb)
+        let pb = ProgressBar::new(plan.total_size);
+        style.apply(&pb, plan.total_files);
+        Some(Arc::new(pb))
     } else {
         None
     };
@@ -90,15 +90,17 @@ async fn execute_copy(
     } else {
         options.concurrency
     };
+    let completed_files = Arc::new(AtomicUsize::new(0));
     let semaphore = Arc::new(Semaphore::new(concurrency));
     let mut tasks = Vec::new();
 
     for file_task in plan.files {
         let sem = semaphore.clone();
-        let mp = multi_progress.clone();
         let overall = overall_pb.clone();
         let style_cloned = style;
         let options_copy = *options;
+        let completed = completed_files.clone();
+        let total_files = plan.total_files;
 
         let task = tokio::spawn(async move {
             let _permit = sem
@@ -106,34 +108,17 @@ async fn execute_copy(
                 .await
                 .map_err(|_| io::Error::new(io::ErrorKind::Other, "Semaphore closed"))?;
 
-            let pb = if options_copy.interactive {
-                ProgressBar::hidden()
-            } else {
-                let pb = mp.add(ProgressBar::new(file_task.size));
-                let file_name = file_task
-                    .source
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-                pb.set_message(format!(" {}", truncate_filename(&file_name, 18)));
-                style_cloned.apply(&pb);
-                pb
-            };
-
             let result = copy_core(
                 &file_task.source,
                 &file_task.destination,
                 file_task.size,
-                &pb,
-                overall.as_ref(),
+                style_cloned,
+                overall.as_deref(),
+                completed.as_ref(),
+                total_files,
                 options_copy,
             )
             .await;
-
-            match &result {
-                Ok(_) => pb.finish_and_clear(),
-                Err(_) => pb.abandon_with_message("Copy failed"),
-            }
 
             result
         });
@@ -152,7 +137,11 @@ async fn execute_copy(
 
     if let Some(pb) = overall_pb {
         if errors.is_empty() {
-            pb.finish_and_clear();
+            if matches!(style, ProgressBarStyle::Default) {
+                pb.finish_with_message(format!("Copied {} files successfully", plan.total_files)); // TODO: see a good message
+            } else {
+                pb.finish_with_message(format!("Done")); // TODO: see a good message
+            }
         } else {
             pb.abandon_with_message("Copy completed with errors");
         }
@@ -172,8 +161,10 @@ async fn copy_core(
     source: &Path,
     destination: &Path,
     file_size: u64,
-    file_pb: &ProgressBar,
+    style: ProgressBarStyle,
     overall_pb: Option<&ProgressBar>,
+    completed_files: &AtomicUsize,
+    total_files: usize,
     options: CopyOptions,
 ) -> io::Result<()> {
     let src_file = tokio::fs::File::open(source).await?;
@@ -209,7 +200,7 @@ async fn copy_core(
 
     let mut buffer = vec![0u8; buffer_size];
 
-    const MAX_UPDATES: u64 = 200;
+    const MAX_UPDATES: u64 = 128;
     let update_threshold = if file_size > MAX_UPDATES * buffer_size as u64 {
         file_size / MAX_UPDATES
     } else {
@@ -227,7 +218,6 @@ async fn copy_core(
 
         accumulated_bytes += bytes_read as u64;
         if accumulated_bytes >= update_threshold {
-            file_pb.inc(accumulated_bytes);
             if let Some(pb) = overall_pb {
                 pb.inc(accumulated_bytes);
             }
@@ -235,12 +225,17 @@ async fn copy_core(
         }
     }
     if accumulated_bytes > 0 {
-        file_pb.inc(accumulated_bytes);
         if let Some(pb) = overall_pb {
             pb.inc(accumulated_bytes);
         }
     }
     dest_file.flush().await?;
+    let completed = completed_files.fetch_add(1, Ordering::Relaxed) + 1;
+    if let Some(pb) = overall_pb
+        && matches!(style, ProgressBarStyle::Default)
+    {
+        pb.set_message(format!("Copying: {}/{} files", completed, total_files));
+    }
     if options.preserve != PreserveAttr::none() {
         preserve::apply_preserve_attrs(source, destination, options.preserve).await?;
     }
