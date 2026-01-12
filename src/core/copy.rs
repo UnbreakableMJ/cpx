@@ -1,5 +1,8 @@
+use super::fast_copy;
 use crate::cli::args::CopyOptions;
-use crate::utility::helper::{create_directories_parallel, prompt_overwrite};
+#[cfg(target_os = "linux")]
+use crate::core::fast_copy::fast_copy;
+use crate::utility::helper::{create_directories, prompt_overwrite};
 use crate::utility::preprocess::{
     CopyPlan, preprocess_directory, preprocess_file, preprocess_multiple,
 };
@@ -71,7 +74,7 @@ async fn execute_copy(
     options: &CopyOptions,
 ) -> io::Result<()> {
     if !options.attributes_only {
-        create_directories_parallel(&plan.directories).await?;
+        create_directories(&plan.directories).await?;
     } else {
         for dir_task in &plan.directories {
             if let Some(src) = &dir_task.source {
@@ -187,6 +190,24 @@ async fn copy_core(
     if options.interactive && tokio::fs::metadata(destination).await.is_ok() {
         if !prompt_overwrite(destination)? {
             return Ok(());
+        }
+    }
+    #[cfg(target_os = "linux")]
+    match fast_copy(source, destination, file_size, overall_pb) {
+        Ok(true) => {
+            let completed = completed_files.fetch_add(1, Ordering::Relaxed) + 1;
+            if let Some(pb) = overall_pb
+                && matches!(style, ProgressBarStyle::Default)
+            {
+                pb.set_message(format!("Copying: {}/{} files", completed, total_files));
+            }
+            if options.preserve != PreserveAttr::none() {
+                preserve::apply_preserve_attrs(source, destination, options.preserve).await?;
+            }
+            return Ok(());
+        }
+        Ok(false) | Err(_) => {
+            // Fallback to regular
         }
     }
     let dest_file = match tokio::fs::File::create(destination).await {

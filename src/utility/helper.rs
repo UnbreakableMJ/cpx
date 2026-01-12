@@ -1,26 +1,21 @@
-use futures::stream::{self, StreamExt};
 use std::path::{Path, PathBuf};
 use tokio::io;
 
-pub async fn create_directories_parallel(
+pub async fn create_directories(
     dirs: &[crate::utility::preprocess::DirectoryTask],
 ) -> io::Result<()> {
-    stream::iter(dirs)
-        .map(|dir| async {
-            tokio::fs::create_dir_all(&dir.destination)
-                .await
-                .or_else(|e| {
-                    if e.kind() == io::ErrorKind::AlreadyExists {
-                        Ok(())
-                    } else {
-                        Err(e)
-                    }
-                })
-        })
-        .buffer_unordered(32)
-        .collect::<Vec<_>>()
-        .await;
-
+    let mut dirs = dirs.to_vec();
+    dirs.sort_by_key(|d| d.destination.components().count());
+    for dir in &dirs {
+        match tokio::fs::create_dir(&dir.destination).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                tokio::fs::create_dir_all(&dir.destination).await?;
+            }
+            Err(e) => return Err(e),
+        }
+    }
     Ok(())
 }
 
