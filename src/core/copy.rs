@@ -186,14 +186,19 @@ async fn copy_core(
         return Ok(());
     }
     let src_file = tokio::fs::File::open(source).await?;
-
-    if options.interactive && tokio::fs::metadata(destination).await.is_ok() {
-        if !prompt_overwrite(destination)? {
-            return Ok(());
+    if options.interactive || options.remove_destination {
+        let exists = tokio::fs::try_exists(destination).await.unwrap_or(false);
+        if options.interactive && exists {
+            if !prompt_overwrite(destination)? {
+                return Ok(());
+            }
+        }
+        if options.remove_destination && exists {
+            tokio::fs::remove_file(destination).await?;
         }
     }
     #[cfg(target_os = "linux")]
-    match fast_copy(source, destination, file_size, overall_pb) {
+    match fast_copy(source, destination, file_size, overall_pb, options) {
         Ok(true) => {
             let completed = completed_files.fetch_add(1, Ordering::Relaxed) + 1;
             if let Some(pb) = overall_pb

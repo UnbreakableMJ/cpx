@@ -65,6 +65,12 @@ pub struct CLIArgs {
         help = "don't copy the file data, just the attributes"
     )]
     pub attributes_only: bool,
+
+    #[arg(
+        long = "remove-destination",
+        help = "remove each existing destination file before attempting to open it"
+    )]
+    pub remove_destination: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -77,6 +83,7 @@ pub struct CopyOptions {
     pub parents: bool,
     pub preserve: PreserveAttr,
     pub attributes_only: bool,
+    pub remove_destination: bool,
 }
 
 impl From<&CLIArgs> for CopyOptions {
@@ -95,6 +102,7 @@ impl From<&CLIArgs> for CopyOptions {
                 }
             },
             attributes_only: cli.attributes_only,
+            remove_destination: cli.remove_destination,
         }
     }
 }

@@ -3,14 +3,31 @@ use nix::fcntl::copy_file_range;
 use std::io;
 use std::path::Path;
 
+use crate::cli::args::CopyOptions;
+
 pub fn fast_copy(
     source: &Path,
     destination: &Path,
     file_size: u64,
     overall_pb: Option<&ProgressBar>,
+    options: CopyOptions,
 ) -> io::Result<bool> {
     let src_file = std::fs::File::open(source)?;
-    let dest_file = std::fs::File::create(destination)?;
+    if options.remove_destination {
+        let exists = std::fs::exists(destination).unwrap_or(false);
+
+        if exists {
+            std::fs::remove_file(destination)?;
+        }
+    }
+    let dest_file = match std::fs::File::create(destination) {
+        Ok(file) => file,
+        Err(_e) if options.force => {
+            let _ = std::fs::remove_file(destination);
+            std::fs::File::create(destination)?
+        }
+        Err(e) => return Err(e),
+    };
     const TARGET_UPDATES: u64 = 128;
     const MIN_CHUNK: usize = 4 * 1024 * 1024;
     let chunk_size = std::cmp::max(MIN_CHUNK, (file_size / TARGET_UPDATES) as usize);
