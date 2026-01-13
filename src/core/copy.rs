@@ -1,4 +1,3 @@
-use super::fast_copy;
 use crate::cli::args::CopyOptions;
 #[cfg(target_os = "linux")]
 use crate::core::fast_copy::fast_copy;
@@ -35,14 +34,13 @@ pub async fn copy(
             ));
         }
 
-        if let Ok(dest_meta) = tokio::fs::metadata(destination).await {
-            if dest_meta.is_file() {
+        if let Ok(dest_meta) = tokio::fs::metadata(destination).await
+            && dest_meta.is_file() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!("'{}' is a file, expected directory", destination.display()),
                 ));
             }
-        }
 
         preprocess_directory(source, destination, options.resume, options.parents)?
     } else {
@@ -77,15 +75,14 @@ async fn execute_copy(
         create_directories(&plan.directories)?;
     } else {
         for dir_task in &plan.directories {
-            if let Some(src) = &dir_task.source {
-                if tokio::fs::symlink_metadata(&dir_task.destination)
+            if let Some(src) = &dir_task.source
+                && tokio::fs::symlink_metadata(&dir_task.destination)
                     .await
                     .is_ok()
                 {
                     preserve::apply_preserve_attrs(src, &dir_task.destination, options.preserve)
                         .await?;
                 }
-            }
         }
     }
 
@@ -117,9 +114,11 @@ async fn execute_copy(
             let _permit = sem
                 .acquire()
                 .await
-                .map_err(|_| io::Error::new(io::ErrorKind::Other, "Semaphore closed"))?;
+                .map_err(|_| io::Error::other("Semaphore closed"))?;
 
-            let result = copy_core(
+            
+
+            copy_core(
                 &file_task.source,
                 &file_task.destination,
                 file_task.size,
@@ -129,9 +128,7 @@ async fn execute_copy(
                 total_files,
                 options_copy,
             )
-            .await;
-
-            result
+            .await
         }));
     }
 
@@ -151,7 +148,7 @@ async fn execute_copy(
             if matches!(style, ProgressBarStyle::Default) && !options.attributes_only {
                 pb.finish_with_message(format!("Copied {} files successfully", plan.total_files)); // TODO: see a good message
             } else {
-                pb.finish_with_message(format!("Done")); // TODO: see a good message
+                pb.finish_with_message("Done".to_string()); // TODO: see a good message
             }
         } else {
             pb.abandon_with_message("Copy completed with errors");
@@ -159,8 +156,7 @@ async fn execute_copy(
     }
 
     if !errors.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             format!("Errors occurred:\n{}", errors.join("\n")),
         ));
     }
@@ -188,11 +184,10 @@ async fn copy_core(
     let src_file = tokio::fs::File::open(source).await?;
     if options.interactive || options.remove_destination {
         let exists = tokio::fs::try_exists(destination).await.unwrap_or(false);
-        if options.interactive && exists {
-            if !prompt_overwrite(destination)? {
+        if options.interactive && exists
+            && !prompt_overwrite(destination)? {
                 return Ok(());
             }
-        }
         if options.remove_destination && exists {
             tokio::fs::remove_file(destination).await?;
         }
@@ -265,11 +260,10 @@ async fn copy_core(
             accumulated_bytes = 0;
         }
     }
-    if accumulated_bytes > 0 {
-        if let Some(pb) = overall_pb {
+    if accumulated_bytes > 0
+        && let Some(pb) = overall_pb {
             pb.inc(accumulated_bytes);
         }
-    }
     dest_file.flush().await?;
     let completed = completed_files.fetch_add(1, Ordering::Relaxed) + 1;
     if let Some(pb) = overall_pb

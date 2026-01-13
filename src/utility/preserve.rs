@@ -108,12 +108,12 @@ async fn preserve_timestamps(
 
     let modified_time = src_metadata
         .modified()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
 
     let system_modified_time = FileTime::from_system_time(modified_time);
 
     set_file_mtime(destination, system_modified_time)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
 
     Ok(())
 }

@@ -27,6 +27,12 @@ pub struct CopyPlan {
     pub skipped_size: u64,
 }
 
+impl Default for CopyPlan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CopyPlan {
     pub fn new() -> Self {
         Self {
@@ -96,11 +102,9 @@ pub fn should_skip_file(source: &Path, destination: &Path) -> io::Result<bool> {
 
     if let (Ok(src_modified), Ok(dest_modified)) =
         (src_metadata.modified(), dest_metadata.modified())
-    {
-        if src_modified < dest_modified {
+        && src_modified < dest_modified {
             return Ok(true);
         }
-    }
 
     let src_checksum = calculate_checksum(source)?;
     let dest_checksum = calculate_checksum(destination)?;
