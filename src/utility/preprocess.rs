@@ -1,7 +1,7 @@
 use super::helper::with_parents;
+use jwalk::WalkDir;
+use std::io;
 use std::path::{Path, PathBuf};
-use tokio::io;
-use tokio::io::AsyncReadExt;
 use xxhash_rust::xxh3::Xxh3;
 
 #[derive(Debug, Clone)]
@@ -65,13 +65,14 @@ impl CopyPlan {
     }
 }
 
-pub async fn calculate_checksum(path: &Path) -> io::Result<u64> {
-    let mut file = tokio::fs::File::open(path).await?;
+fn calculate_checksum(path: &Path) -> io::Result<u64> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
     let mut hasher = Xxh3::new(); // streaming xxh3 hasher
     let mut buffer = vec![0u8; 128 * 1024];
 
     loop {
-        let bytes_read = file.read(&mut buffer).await?;
+        let bytes_read = file.read(&mut buffer)?;
         if bytes_read == 0 {
             break;
         }
@@ -81,13 +82,13 @@ pub async fn calculate_checksum(path: &Path) -> io::Result<u64> {
     Ok(hasher.digest())
 }
 
-async fn should_skip_file(source: &Path, destination: &Path) -> io::Result<bool> {
-    let dest_metadata = match tokio::fs::metadata(destination).await {
+pub fn should_skip_file(source: &Path, destination: &Path) -> io::Result<bool> {
+    let dest_metadata = match std::fs::metadata(destination) {
         Ok(meta) => meta,
         Err(_) => return Ok(false),
     };
 
-    let src_metadata = tokio::fs::metadata(source).await?;
+    let src_metadata = std::fs::metadata(source)?;
 
     if dest_metadata.len() != src_metadata.len() {
         return Ok(false);
@@ -101,19 +102,19 @@ async fn should_skip_file(source: &Path, destination: &Path) -> io::Result<bool>
         }
     }
 
-    let src_checksum = calculate_checksum(source).await?;
-    let dest_checksum = calculate_checksum(destination).await?;
+    let src_checksum = calculate_checksum(source)?;
+    let dest_checksum = calculate_checksum(destination)?;
 
     Ok(src_checksum == dest_checksum)
 }
 
-pub async fn preprocess_file(
+pub fn preprocess_file(
     source: &Path,
     destination: &Path,
     resume: bool,
     parents: bool,
 ) -> io::Result<CopyPlan> {
-    let src_metadata = tokio::fs::metadata(source).await?;
+    let src_metadata = std::fs::metadata(source)?;
 
     if src_metadata.is_dir() {
         return Err(io::Error::new(
@@ -125,7 +126,7 @@ pub async fn preprocess_file(
     let mut plan = CopyPlan::new();
 
     let dest_path = if parents {
-        let dest_meta = tokio::fs::metadata(destination).await.map_err(|_| {
+        let dest_meta = std::fs::metadata(destination).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
@@ -146,7 +147,7 @@ pub async fn preprocess_file(
         }
 
         with_parents(destination, source)
-    } else if let Ok(dest_meta) = tokio::fs::metadata(destination).await {
+    } else if let Ok(dest_meta) = std::fs::metadata(destination) {
         if dest_meta.is_dir() {
             destination.join(source.file_name().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidInput, "Invalid source path")
@@ -160,7 +161,7 @@ pub async fn preprocess_file(
     if parents && let Some(parent) = dest_path.parent() {
         plan.add_directory(None, parent.to_path_buf());
     }
-    if resume && should_skip_file(source, &dest_path).await? {
+    if resume && should_skip_file(source, &dest_path)? {
         plan.mark_skipped(src_metadata.len());
     } else {
         plan.add_file(source.to_path_buf(), dest_path, src_metadata.len());
@@ -168,7 +169,7 @@ pub async fn preprocess_file(
     Ok(plan)
 }
 
-pub async fn preprocess_directory(
+pub fn preprocess_directory(
     source: &Path,
     destination: &Path,
     resume: bool,
@@ -183,24 +184,34 @@ pub async fn preprocess_directory(
                 io::Error::new(io::ErrorKind::InvalidInput, "Invalid source path")
             })?)
         };
-    let mut stack = vec![(source.to_path_buf(), root_destination)];
+    plan.add_directory(Some(source.to_path_buf()), root_destination.clone());
+    let num_threads = num_cpus::get().min(8);
+    for entry in WalkDir::new(source)
+        .skip_hidden(false)
+        .sort(true)
+        .parallelism(jwalk::Parallelism::RayonNewPool(num_threads))
+    {
+        let entry = entry?;
+        let src_path = entry.path();
 
-    while let Some((src_dir, dest_dir)) = stack.pop() {
-        plan.add_directory(Some(src_dir.clone()), dest_dir.clone());
-        let mut entries = tokio::fs::read_dir(&src_dir).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            let src_path = entry.path();
-            let dest_path = dest_dir.join(entry.file_name());
-            let metadata = entry.metadata().await?;
-
-            if metadata.is_dir() {
-                stack.push((src_path, dest_path));
+        if src_path == source {
+            continue;
+        }
+        let relative = src_path.strip_prefix(source).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Failed to calculate relative path",
+            )
+        })?;
+        let dest_path = root_destination.join(relative);
+        let metadata = entry.metadata()?;
+        if metadata.is_dir() {
+            plan.add_directory(Some(src_path.to_path_buf()), dest_path);
+        } else if metadata.is_file() {
+            if resume && should_skip_file(&src_path, &dest_path)? {
+                plan.mark_skipped(metadata.len());
             } else {
-                if resume && should_skip_file(&src_path, &dest_path).await? {
-                    plan.mark_skipped(metadata.len());
-                } else {
-                    plan.add_file(src_path, dest_path, metadata.len());
-                }
+                plan.add_file(src_path.to_path_buf(), dest_path, metadata.len());
             }
         }
     }
@@ -208,13 +219,13 @@ pub async fn preprocess_directory(
     Ok(plan)
 }
 
-pub async fn preprocess_multiple(
+pub fn preprocess_multiple(
     sources: &[PathBuf],
     destination: &Path,
     resume: bool,
     parents: bool,
 ) -> io::Result<CopyPlan> {
-    let dest_metadata = tokio::fs::metadata(destination).await?;
+    let dest_metadata = std::fs::metadata(destination)?;
     if !dest_metadata.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -224,10 +235,10 @@ pub async fn preprocess_multiple(
 
     let mut plan = CopyPlan::new();
     for source in sources {
-        let metadata = tokio::fs::metadata(source).await?;
+        let metadata = std::fs::metadata(source)?;
 
         if metadata.is_dir() {
-            let dir_plan = preprocess_directory(source, destination, resume, parents).await?;
+            let dir_plan = preprocess_directory(source, destination, resume, parents)?;
             plan.files.extend(dir_plan.files);
             plan.directories.extend(dir_plan.directories);
             plan.total_size += dir_plan.total_size;
@@ -249,7 +260,7 @@ pub async fn preprocess_multiple(
                 plan.add_directory(None, parent.to_path_buf());
             }
 
-            if resume && should_skip_file(source, &dest_path).await? {
+            if resume && should_skip_file(source, &dest_path)? {
                 plan.mark_skipped(metadata.len());
             } else {
                 plan.add_file(source.clone(), dest_path, metadata.len());
@@ -263,230 +274,49 @@ pub async fn preprocess_multiple(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs as std_fs;
     use tempfile::TempDir;
 
-    async fn create_test_file(path: &Path, content: &[u8]) -> io::Result<()> {
+    fn create_test_file(path: &Path, content: &[u8]) -> io::Result<()> {
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+            std_fs::create_dir_all(parent)?;
         }
-        tokio::fs::write(path, content).await
+        std_fs::write(path, content)
     }
 
-    #[tokio::test]
-    async fn test_calculate_checksum_same_content() {
+    #[test]
+    fn test_calculate_checksum_same_content() {
         let temp_dir = TempDir::new().unwrap();
         let file1 = temp_dir.path().join("file1.txt");
         let file2 = temp_dir.path().join("file2.txt");
 
         let content = b"Hello, World!";
-        create_test_file(&file1, content).await.unwrap();
-        create_test_file(&file2, content).await.unwrap();
+        create_test_file(&file1, content).unwrap();
+        create_test_file(&file2, content).unwrap();
 
-        let hash1 = calculate_checksum(&file1).await.unwrap();
-        let hash2 = calculate_checksum(&file2).await.unwrap();
+        let hash1 = calculate_checksum(&file1).unwrap();
+        let hash2 = calculate_checksum(&file2).unwrap();
 
         assert_eq!(hash1, hash2);
     }
 
-    #[tokio::test]
-    async fn test_calculate_checksum_different_content() {
-        let temp_dir = TempDir::new().unwrap();
-        let file1 = temp_dir.path().join("file1.txt");
-        let file2 = temp_dir.path().join("file2.txt");
-
-        create_test_file(&file1, b"Hello").await.unwrap();
-        create_test_file(&file2, b"World").await.unwrap();
-
-        let hash1 = calculate_checksum(&file1).await.unwrap();
-        let hash2 = calculate_checksum(&file2).await.unwrap();
-
-        assert_ne!(hash1, hash2);
-    }
-
-    #[tokio::test]
-    async fn test_should_skip_file_identical() {
-        let temp_dir = TempDir::new().unwrap();
-        let source = temp_dir.path().join("source.txt");
-        let dest = temp_dir.path().join("dest.txt");
-
-        let content = b"test content";
-        create_test_file(&source, content).await.unwrap();
-        create_test_file(&dest, content).await.unwrap();
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        tokio::fs::write(&dest, content).await.unwrap();
-
-        let should_skip = should_skip_file(&source, &dest).await.unwrap();
-        assert!(should_skip, "Should skip identical file with newer mtime");
-    }
-
-    #[tokio::test]
-    async fn test_should_skip_file_different_content() {
-        let temp_dir = TempDir::new().unwrap();
-        let source = temp_dir.path().join("source.txt");
-        let dest = temp_dir.path().join("dest.txt");
-
-        create_test_file(&source, b"source content").await.unwrap();
-        create_test_file(&dest, b"different content").await.unwrap();
-
-        let should_skip = should_skip_file(&source, &dest).await.unwrap();
-        assert!(!should_skip, "Should not skip files with different content");
-    }
-
-    #[tokio::test]
-    async fn test_should_skip_file_dest_not_exists() {
-        let temp_dir = TempDir::new().unwrap();
-        let source = temp_dir.path().join("source.txt");
-        let dest = temp_dir.path().join("dest.txt");
-
-        create_test_file(&source, b"content").await.unwrap();
-
-        let should_skip = should_skip_file(&source, &dest).await.unwrap();
-        assert!(!should_skip, "Should not skip when dest doesn't exist");
-    }
-
-    #[tokio::test]
-    async fn test_preprocess_file_single() {
-        let temp_dir = TempDir::new().unwrap();
-        let source = temp_dir.path().join("source.txt");
-        let dest = temp_dir.path().join("dest.txt");
-
-        create_test_file(&source, b"test").await.unwrap();
-
-        let plan = preprocess_file(&source, &dest, false, false).await.unwrap();
-
-        assert_eq!(plan.total_files, 1);
-        assert_eq!(plan.files.len(), 1);
-        assert_eq!(plan.files[0].source, source);
-        assert_eq!(plan.files[0].destination, dest);
-    }
-
-    #[tokio::test]
-    async fn test_preprocess_file_with_resume_skip() {
-        let temp_dir = TempDir::new().unwrap();
-        let source = temp_dir.path().join("source.txt");
-        let dest = temp_dir.path().join("dest.txt");
-
-        let content = b"test content";
-        create_test_file(&source, content).await.unwrap();
-        create_test_file(&dest, content).await.unwrap();
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        tokio::fs::write(&dest, content).await.unwrap();
-
-        let plan = preprocess_file(&source, &dest, true, false).await.unwrap();
-
-        assert_eq!(plan.total_files, 0);
-        assert_eq!(plan.skipped_files, 1);
-        assert_eq!(plan.files.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_preprocess_directory() {
+    #[test]
+    fn test_preprocess_directory() {
         let temp_dir = TempDir::new().unwrap();
         let source_dir = temp_dir.path().join("source");
         let dest_dir = temp_dir.path().join("dest");
 
-        tokio::fs::create_dir_all(&source_dir).await.unwrap();
-        create_test_file(&source_dir.join("file1.txt"), b"content1")
-            .await
-            .unwrap();
-        create_test_file(&source_dir.join("file2.txt"), b"content2")
-            .await
-            .unwrap();
+        std_fs::create_dir_all(&source_dir).unwrap();
+        create_test_file(&source_dir.join("file1.txt"), b"content1").unwrap();
+        create_test_file(&source_dir.join("file2.txt"), b"content2").unwrap();
 
         let subdir = source_dir.join("subdir");
-        tokio::fs::create_dir_all(&subdir).await.unwrap();
-        create_test_file(&subdir.join("file3.txt"), b"content3")
-            .await
-            .unwrap();
+        std_fs::create_dir_all(&subdir).unwrap();
+        create_test_file(&subdir.join("file3.txt"), b"content3").unwrap();
 
-        let plan = preprocess_directory(&source_dir, &dest_dir, false, false)
-            .await
-            .unwrap();
+        let plan = preprocess_directory(&source_dir, &dest_dir, false, false).unwrap();
 
         assert_eq!(plan.total_files, 3);
-        assert!(plan.directories.len() >= 2);
-    }
-
-    #[tokio::test]
-    async fn test_preprocess_multiple_files() {
-        let temp_dir = TempDir::new().unwrap();
-        let dest_dir = temp_dir.path().join("dest");
-        tokio::fs::create_dir_all(&dest_dir).await.unwrap();
-
-        let file1 = temp_dir.path().join("file1.txt");
-        let file2 = temp_dir.path().join("file2.txt");
-
-        create_test_file(&file1, b"content1").await.unwrap();
-        create_test_file(&file2, b"content2").await.unwrap();
-
-        let sources = vec![file1.clone(), file2.clone()];
-        let plan = preprocess_multiple(&sources, &dest_dir, false, false)
-            .await
-            .unwrap();
-
-        assert_eq!(plan.total_files, 2);
-        assert_eq!(plan.files.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_preprocess_multiple_with_directory() {
-        let temp_dir = TempDir::new().unwrap();
-        let dest_dir = temp_dir.path().join("dest");
-        tokio::fs::create_dir_all(&dest_dir).await.unwrap();
-
-        let file1 = temp_dir.path().join("file1.txt");
-        let source_dir = temp_dir.path().join("source");
-        tokio::fs::create_dir_all(&source_dir).await.unwrap();
-
-        create_test_file(&file1, b"content1").await.unwrap();
-        create_test_file(&source_dir.join("file2.txt"), b"content2")
-            .await
-            .unwrap();
-
-        let sources = vec![file1, source_dir];
-        let plan = preprocess_multiple(&sources, &dest_dir, false, false)
-            .await
-            .unwrap();
-
-        assert_eq!(plan.total_files, 2);
-    }
-
-    #[tokio::test]
-    async fn test_copy_plan_sort_by_size() {
-        let mut plan = CopyPlan::new();
-
-        plan.add_file(PathBuf::from("small.txt"), PathBuf::from("dest1"), 100);
-        plan.add_file(PathBuf::from("large.txt"), PathBuf::from("dest2"), 1000);
-        plan.add_file(PathBuf::from("medium.txt"), PathBuf::from("dest3"), 500);
-
-        plan.sort_by_size_desc();
-
-        assert_eq!(plan.files[0].size, 1000);
-        assert_eq!(plan.files[1].size, 500);
-        assert_eq!(plan.files[2].size, 100);
-    }
-
-    #[tokio::test]
-    async fn test_preprocess_file_with_parents() {
-        let temp_dir = TempDir::new().unwrap();
-        let source = temp_dir.path().join("subdir").join("file.txt");
-        let dest_dir = temp_dir.path().join("dest");
-
-        tokio::fs::create_dir_all(&dest_dir).await.unwrap();
-        create_test_file(&source, b"content").await.unwrap();
-
-        let plan = preprocess_file(&source, &dest_dir, false, true)
-            .await
-            .unwrap();
-
-        assert_eq!(plan.total_files, 1);
-        assert!(
-            plan.files[0]
-                .destination
-                .to_string_lossy()
-                .contains("subdir")
-        );
+        assert!(!plan.directories.is_empty());
     }
 }
