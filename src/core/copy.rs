@@ -21,9 +21,9 @@ pub async fn copy(
     style: ProgressBarStyle,
     options: &CopyOptions,
 ) -> io::Result<()> {
-    let src_metadata = tokio::fs::metadata(source).await?;
-
-    let plan = if src_metadata.is_dir() {
+    let source_metadata = tokio::fs::metadata(source).await?;
+    let destination_metadata = tokio::fs::metadata(destination).await.ok();
+    let plan = if source_metadata.is_dir() {
         if !options.recursive {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -34,7 +34,7 @@ pub async fn copy(
             ));
         }
 
-        if let Ok(dest_meta) = tokio::fs::metadata(destination).await
+        if let Some(dest_meta) = destination_metadata
             && dest_meta.is_file()
         {
             return Err(io::Error::new(
@@ -45,7 +45,14 @@ pub async fn copy(
 
         preprocess_directory(source, destination, options.resume, options.parents)?
     } else {
-        preprocess_file(source, destination, options.resume, options.parents)?
+        preprocess_file(
+            source,
+            destination,
+            options.resume,
+            options.parents,
+            source_metadata,
+            destination_metadata,
+        )?
     };
     if plan.skipped_files > 0 {
         eprintln!("Skipping {} files that already exist", plan.skipped_files);

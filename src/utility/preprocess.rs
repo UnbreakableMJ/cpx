@@ -1,5 +1,6 @@
 use super::helper::with_parents;
 use jwalk::WalkDir;
+use std::fs::Metadata;
 use std::io;
 use std::path::{Path, PathBuf};
 use xxhash_rust::xxh3::Xxh3;
@@ -118,10 +119,10 @@ pub fn preprocess_file(
     destination: &Path,
     resume: bool,
     parents: bool,
+    source_metadata: Metadata,
+    destination_metadata: Option<Metadata>,
 ) -> io::Result<CopyPlan> {
-    let src_metadata = std::fs::metadata(source)?;
-
-    if src_metadata.is_dir() {
+    if source_metadata.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("'{}' is a directory", source.display()),
@@ -131,15 +132,15 @@ pub fn preprocess_file(
     let mut plan = CopyPlan::new();
 
     let dest_path = if parents {
-        let dest_meta = std::fs::metadata(destination).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "Destination '{}' does not exist, with --parents destination must be a directory",
-                destination.display()
-            ),
-        )
-    })?;
+        let dest_meta = destination_metadata.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "Destination '{}' does not exist, with --parents destination must be a directory",
+                    destination.display()
+                ),
+            )
+        })?;
 
         if !dest_meta.is_dir() {
             return Err(io::Error::new(
@@ -152,7 +153,7 @@ pub fn preprocess_file(
         }
 
         with_parents(destination, source)
-    } else if let Ok(dest_meta) = std::fs::metadata(destination) {
+    } else if let Some(dest_meta) = destination_metadata {
         if dest_meta.is_dir() {
             destination.join(source.file_name().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidInput, "Invalid source path")
@@ -167,9 +168,9 @@ pub fn preprocess_file(
         plan.add_directory(None, parent.to_path_buf());
     }
     if resume && should_skip_file(source, &dest_path)? {
-        plan.mark_skipped(src_metadata.len());
+        plan.mark_skipped(source_metadata.len());
     } else {
-        plan.add_file(source.to_path_buf(), dest_path, src_metadata.len());
+        plan.add_file(source.to_path_buf(), dest_path, source_metadata.len());
     }
     Ok(plan)
 }
