@@ -43,13 +43,12 @@ pub async fn copy(
             ));
         }
 
-        preprocess_directory(source, destination, options.resume, options.parents)?
+        preprocess_directory(source, destination, options)?
     } else {
         preprocess_file(
             source,
             destination,
-            options.resume,
-            options.parents,
+            options,
             source_metadata,
             destination_metadata,
         )?
@@ -67,7 +66,7 @@ pub async fn multiple_copy(
     style: ProgressBarStyle,
     options: &CopyOptions,
 ) -> io::Result<()> {
-    let plan = preprocess_multiple(&sources, &destination, options.resume, options.parents)?;
+    let plan = preprocess_multiple(&sources, &destination, options)?;
     if plan.skipped_files > 0 {
         eprintln!("Skipping {} files that already exist", plan.skipped_files);
     }

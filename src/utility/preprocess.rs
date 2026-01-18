@@ -1,4 +1,5 @@
 use super::helper::with_parents;
+use crate::cli::args::CopyOptions;
 use jwalk::WalkDir;
 use std::fs::Metadata;
 use std::io;
@@ -67,7 +68,7 @@ impl CopyPlan {
         self.skipped_size += size;
     }
 
-    pub fn sort_by_size_desc(&mut self) {
+    pub fn sort_files_descending(&mut self) {
         self.files.sort_by(|a, b| b.size.cmp(&a.size));
     }
 }
@@ -117,8 +118,7 @@ pub fn should_skip_file(source: &Path, destination: &Path) -> io::Result<bool> {
 pub fn preprocess_file(
     source: &Path,
     destination: &Path,
-    resume: bool,
-    parents: bool,
+    options: &CopyOptions,
     source_metadata: Metadata,
     destination_metadata: Option<Metadata>,
 ) -> io::Result<CopyPlan> {
@@ -131,7 +131,7 @@ pub fn preprocess_file(
 
     let mut plan = CopyPlan::new();
 
-    let dest_path = if parents {
+    let dest_path = if options.parents {
         let dest_meta = destination_metadata.ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -164,10 +164,12 @@ pub fn preprocess_file(
     } else {
         destination.to_path_buf()
     };
-    if parents && let Some(parent) = dest_path.parent() {
+    if options.parents
+        && let Some(parent) = dest_path.parent()
+    {
         plan.add_directory(None, parent.to_path_buf());
     }
-    if resume && should_skip_file(source, &dest_path)? {
+    if options.resume && should_skip_file(source, &dest_path)? {
         plan.mark_skipped(source_metadata.len());
     } else {
         plan.add_file(source.to_path_buf(), dest_path, source_metadata.len());
@@ -178,12 +180,11 @@ pub fn preprocess_file(
 pub fn preprocess_directory(
     source: &Path,
     destination: &Path,
-    resume: bool,
-    parents: bool,
+    options: &CopyOptions,
 ) -> io::Result<CopyPlan> {
     let mut plan = CopyPlan::new();
     let root_destination =
-        if parents {
+        if options.parents {
             with_parents(destination, source)
         } else {
             destination.join(source.file_name().ok_or_else(|| {
@@ -213,22 +214,21 @@ pub fn preprocess_directory(
         if metadata.is_dir() {
             plan.add_directory(Some(src_path.to_path_buf()), dest_path);
         } else if metadata.is_file() {
-            if resume && should_skip_file(&src_path, &dest_path)? {
+            if options.resume && should_skip_file(&src_path, &dest_path)? {
                 plan.mark_skipped(metadata.len());
             } else {
                 plan.add_file(src_path.to_path_buf(), dest_path, metadata.len());
             }
         }
     }
-    plan.sort_by_size_desc();
+    plan.sort_files_descending();
     Ok(plan)
 }
 
 pub fn preprocess_multiple(
     sources: &[PathBuf],
     destination: &Path,
-    resume: bool,
-    parents: bool,
+    options: &CopyOptions,
 ) -> io::Result<CopyPlan> {
     let dest_metadata = std::fs::metadata(destination)?;
     if !dest_metadata.is_dir() {
@@ -243,7 +243,7 @@ pub fn preprocess_multiple(
         let metadata = std::fs::metadata(source)?;
 
         if metadata.is_dir() {
-            let dir_plan = preprocess_directory(source, destination, resume, parents)?;
+            let dir_plan = preprocess_directory(source, destination, options)?;
             plan.files.extend(dir_plan.files);
             plan.directories.extend(dir_plan.directories);
             plan.total_size += dir_plan.total_size;
@@ -255,29 +255,32 @@ pub fn preprocess_multiple(
                 io::Error::new(io::ErrorKind::InvalidInput, "Invalid source path")
             })?;
 
-            let dest_path = if parents {
+            let dest_path = if options.parents {
                 with_parents(destination, source)
             } else {
                 destination.join(file_name)
             };
 
-            if parents && let Some(parent) = dest_path.parent() {
+            if options.parents
+                && let Some(parent) = dest_path.parent()
+            {
                 plan.add_directory(None, parent.to_path_buf());
             }
 
-            if resume && should_skip_file(source, &dest_path)? {
+            if options.resume && should_skip_file(source, &dest_path)? {
                 plan.mark_skipped(metadata.len());
             } else {
                 plan.add_file(source.clone(), dest_path, metadata.len());
             }
         }
     }
-    plan.sort_by_size_desc();
+    plan.sort_files_descending();
     Ok(plan)
 }
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use std::fs as std_fs;
     use tempfile::TempDir;
@@ -318,8 +321,8 @@ mod tests {
         let subdir = source_dir.join("subdir");
         std_fs::create_dir_all(&subdir).unwrap();
         create_test_file(&subdir.join("file3.txt"), b"content3").unwrap();
-
-        let plan = preprocess_directory(&source_dir, &dest_dir, false, false).unwrap();
+        let options = CopyOptions::none();
+        let plan = preprocess_directory(&source_dir, &dest_dir, &options).unwrap();
 
         assert_eq!(plan.total_files, 3);
         assert!(!plan.directories.is_empty());

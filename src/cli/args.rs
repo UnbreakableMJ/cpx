@@ -18,7 +18,7 @@ pub struct CLIArgs {
     )]
     pub target_directory: Option<PathBuf>,
 
-    #[arg(short, long, help = "Progress bar style: default, minimal, detailed")]
+    #[arg(long, help = "Progress bar style: default, minimal, detailed")]
     pub style: Option<String>,
 
     #[arg(short, long, help = "Copy directories recursively")]
@@ -71,6 +71,13 @@ pub struct CLIArgs {
         help = "remove each existing destination file before attempting to open it"
     )]
     pub remove_destination: bool,
+
+    #[arg(
+        short = 's',
+        long = "symbolic-link",
+        help = "make symbolic links instead of copying"
+    )]
+    pub symbolic_link: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -84,6 +91,24 @@ pub struct CopyOptions {
     pub preserve: PreserveAttr,
     pub attributes_only: bool,
     pub remove_destination: bool,
+    pub symbolic_link: bool,
+}
+
+impl CopyOptions {
+    pub fn none() -> Self {
+        Self {
+            recursive: false,
+            concurrency: 4,
+            resume: false,
+            force: false,
+            interactive: false,
+            parents: false,
+            preserve: PreserveAttr::none(),
+            attributes_only: false,
+            remove_destination: false,
+            symbolic_link: false,
+        }
+    }
 }
 
 impl From<&CLIArgs> for CopyOptions {
@@ -103,6 +128,7 @@ impl From<&CLIArgs> for CopyOptions {
             },
             attributes_only: cli.attributes_only,
             remove_destination: cli.remove_destination,
+            symbolic_link: cli.symbolic_link,
         }
     }
 }
