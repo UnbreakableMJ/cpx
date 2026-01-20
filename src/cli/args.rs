@@ -9,6 +9,14 @@ pub enum SymlinkMode {
     Relative,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
+pub enum BackupMode {
+    None,
+    Numbered,
+    Existing,
+    Simple,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum FollowSymlink {
     NoDereference,
@@ -126,6 +134,16 @@ pub struct CLIArgs {
         help = "follow symbolic links only on command line"
     )]
     pub dereference_command_line: bool,
+
+    #[arg(
+        short = 'b',
+        long = "backup",
+        value_name = "CONTROL",
+        default_missing_value = "existing",
+        num_args = 0..=1,
+        help = "make a backup of each existing destination file (none, numbered, existing, simple)"
+    )]
+    pub backup: Option<BackupMode>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -143,6 +161,7 @@ pub struct CopyOptions {
     pub hard_link: bool,
     pub follow_symlink: FollowSymlink,
     pub style: ProgressBarStyle,
+    pub backup: Option<BackupMode>,
 }
 
 impl CopyOptions {
@@ -161,6 +180,7 @@ impl CopyOptions {
             hard_link: false,
             follow_symlink: FollowSymlink::NoDereference,
             style: ProgressBarStyle::Default,
+            backup: None,
         }
     }
 }
@@ -186,6 +206,7 @@ impl From<&CLIArgs> for CopyOptions {
             hard_link: cli.hard_link,
             follow_symlink: FollowSymlink::NoDereference,
             style: cli.style,
+            backup: cli.backup,
         }
     }
 }
@@ -270,6 +291,7 @@ mod tests {
             dereference: true,
             no_dereference: false,
             dereference_command_line: false,
+            backup: None,
         };
 
         let result = args.validate();
@@ -298,6 +320,7 @@ mod tests {
             dereference: true,
             no_dereference: false,
             dereference_command_line: false,
+            backup: None,
         };
 
         let result = args.validate();
@@ -326,6 +349,7 @@ mod tests {
             dereference: true,
             no_dereference: false,
             dereference_command_line: false,
+            backup: None,
         };
 
         let result = args.validate();
@@ -354,6 +378,7 @@ mod tests {
             dereference: true,
             no_dereference: false,
             dereference_command_line: false,
+            backup: None,
         };
 
         let result = args.validate();

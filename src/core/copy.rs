@@ -1,6 +1,7 @@
-use crate::cli::args::{CopyOptions, FollowSymlink};
+use crate::cli::args::{BackupMode, CopyOptions, FollowSymlink};
 #[cfg(target_os = "linux")]
 use crate::core::fast_copy::fast_copy;
+use crate::utility::backup::{create_backup, generate_backup_path};
 use crate::utility::helper::{
     create_directories, create_hardlink, create_symlink, prompt_overwrite,
 };
@@ -214,14 +215,23 @@ async fn copy_core(
         preserve::apply_preserve_attrs(source, destination, options.preserve).await?;
         return Ok(());
     }
-    if options.remove_destination {
-        let _ = tokio::fs::remove_file(destination).await;
-    }
+
     if options.interactive
         && tokio::fs::try_exists(destination).await.unwrap_or(false)
         && !prompt_overwrite(destination)?
     {
         return Ok(());
+    }
+    if let Some(backup_mode) = options.backup
+        && backup_mode != BackupMode::None
+        && tokio::fs::try_exists(destination).await.unwrap_or(false)
+    {
+        let backup_path = generate_backup_path(destination, backup_mode)?;
+
+        let _ = create_backup(destination, &backup_path).await;
+    }
+    if options.remove_destination {
+        let _ = tokio::fs::remove_file(destination).await;
     }
 
     #[cfg(target_os = "linux")]
