@@ -1,4 +1,4 @@
-use crate::utility::preserve::PreserveAttr;
+use crate::utility::{preserve::PreserveAttr, progress_bar::ProgressBarStyle};
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 
@@ -8,6 +8,14 @@ pub enum SymlinkMode {
     Absolute,
     Relative,
 }
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum FollowSymlink {
+    NoDereference,
+    Dereference,
+    CommandLineSymlink,
+}
+
 #[derive(Parser, Debug)]
 pub struct CLIArgs {
     #[arg(required = true)]
@@ -24,8 +32,12 @@ pub struct CLIArgs {
     )]
     pub target_directory: Option<PathBuf>,
 
-    #[arg(long, help = "Progress bar style: default, minimal, detailed")]
-    pub style: Option<String>,
+    #[arg(
+        long,
+        default_value = "default",
+        help = "Progress bar style: default, detailed"
+    )]
+    pub style: ProgressBarStyle,
 
     #[arg(short, long, help = "Copy directories recursively")]
     pub recursive: bool,
@@ -94,6 +106,26 @@ pub struct CLIArgs {
         help = "hard link files instead of copying"
     )]
     pub hard_link: bool,
+
+    #[arg(
+        short = 'P',
+        long = "no-dereference",
+        help = "never follow symbolic links in SOURCE"
+    )]
+    pub no_dereference: bool,
+    #[arg(
+        short = 'L',
+        long = "dereference",
+        help = "always follow symbolic links in SOURCE"
+    )]
+    pub dereference: bool,
+
+    #[arg(
+        short = 'H',
+        long = "dereference-command-line",
+        help = "follow symbolic links only on command line"
+    )]
+    pub dereference_command_line: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -109,6 +141,8 @@ pub struct CopyOptions {
     pub remove_destination: bool,
     pub symbolic_link: Option<SymlinkMode>,
     pub hard_link: bool,
+    pub follow_symlink: FollowSymlink,
+    pub style: ProgressBarStyle,
 }
 
 impl CopyOptions {
@@ -125,6 +159,8 @@ impl CopyOptions {
             remove_destination: false,
             symbolic_link: None,
             hard_link: false,
+            follow_symlink: FollowSymlink::NoDereference,
+            style: ProgressBarStyle::Default,
         }
     }
 }
@@ -148,13 +184,31 @@ impl From<&CLIArgs> for CopyOptions {
             remove_destination: cli.remove_destination,
             symbolic_link: cli.symbolic_link,
             hard_link: cli.hard_link,
+            follow_symlink: FollowSymlink::NoDereference,
+            style: cli.style,
         }
     }
 }
 
 impl CLIArgs {
+    pub fn follow_symlink_mode(&self) -> Result<FollowSymlink, String> {
+        match (
+            self.no_dereference,
+            self.dereference,
+            self.dereference_command_line,
+        ) {
+            (true, false, false) => Ok(FollowSymlink::NoDereference),
+            (false, true, false) => Ok(FollowSymlink::Dereference),
+            (false, false, true) => Ok(FollowSymlink::CommandLineSymlink),
+            (false, false, false) => Ok(FollowSymlink::NoDereference),
+            _ => Err("only one of -P, -L, or -H may be specified".to_string()),
+        }
+    }
     pub fn validate(mut self) -> Result<(Vec<PathBuf>, PathBuf, CopyOptions), String> {
+        let follow_symlink = self.follow_symlink_mode()?;
         let mut options = CopyOptions::from(&self);
+        options.follow_symlink = follow_symlink;
+
         if options.symbolic_link.is_some() {
             if options.hard_link {
                 return Err("--symbolic-link and --link cannot be used together".to_string());
@@ -201,7 +255,7 @@ mod tests {
             sources: vec![PathBuf::from("source.txt")],
             destination: PathBuf::from("dest.txt"),
             target_directory: None,
-            style: None,
+            style: ProgressBarStyle::Default,
             recursive: false,
             concurrency: 4,
             continue_copy: false,
@@ -213,6 +267,9 @@ mod tests {
             remove_destination: false,
             symbolic_link: Some(SymlinkMode::Auto),
             hard_link: true,
+            dereference: true,
+            no_dereference: false,
+            dereference_command_line: false,
         };
 
         let result = args.validate();
@@ -226,7 +283,7 @@ mod tests {
             sources: vec![PathBuf::from("source.txt")],
             destination: PathBuf::from("dest.txt"),
             target_directory: None,
-            style: None,
+            style: ProgressBarStyle::Default,
             recursive: false,
             concurrency: 4,
             continue_copy: true,
@@ -238,6 +295,9 @@ mod tests {
             remove_destination: false,
             symbolic_link: Some(SymlinkMode::Auto),
             hard_link: false,
+            dereference: true,
+            no_dereference: false,
+            dereference_command_line: false,
         };
 
         let result = args.validate();
@@ -251,7 +311,7 @@ mod tests {
             sources: vec![PathBuf::from("source.txt")],
             destination: PathBuf::from("dest.txt"),
             target_directory: None,
-            style: None,
+            style: ProgressBarStyle::Default,
             recursive: false,
             concurrency: 4,
             continue_copy: true,
@@ -263,6 +323,9 @@ mod tests {
             remove_destination: false,
             symbolic_link: None,
             hard_link: true,
+            dereference: true,
+            no_dereference: false,
+            dereference_command_line: false,
         };
 
         let result = args.validate();
@@ -276,7 +339,7 @@ mod tests {
             sources: vec![PathBuf::from("source.txt")],
             destination: PathBuf::from("dest.txt"),
             target_directory: None,
-            style: None,
+            style: ProgressBarStyle::Default,
             recursive: false,
             concurrency: 4,
             continue_copy: false,
@@ -288,6 +351,9 @@ mod tests {
             remove_destination: false,
             symbolic_link: None,
             hard_link: false,
+            dereference: true,
+            no_dereference: false,
+            dereference_command_line: false,
         };
 
         let result = args.validate();

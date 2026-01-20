@@ -1,4 +1,4 @@
-use crate::cli::args::CopyOptions;
+use crate::cli::args::{CopyOptions, FollowSymlink};
 #[cfg(target_os = "linux")]
 use crate::core::fast_copy::fast_copy;
 use crate::utility::helper::{
@@ -17,13 +17,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{path::Path, path::PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
-pub async fn copy(
-    source: &Path,
-    destination: &Path,
-    style: ProgressBarStyle,
-    options: &CopyOptions,
-) -> io::Result<()> {
-    let source_metadata = tokio::fs::symlink_metadata(source).await?;
+pub async fn copy(source: &Path, destination: &Path, options: &CopyOptions) -> io::Result<()> {
+    let source_metadata = match options.follow_symlink {
+        FollowSymlink::Dereference | FollowSymlink::CommandLineSymlink => {
+            tokio::fs::metadata(source).await?
+        }
+        FollowSymlink::NoDereference => tokio::fs::symlink_metadata(source).await?,
+    };
     let destination_metadata = tokio::fs::metadata(destination).await.ok();
     let plan = if source_metadata.is_dir() {
         if !options.recursive {
@@ -59,27 +59,22 @@ pub async fn copy(
         eprintln!("Skipping {} files that already exist", plan.skipped_files);
     }
 
-    execute_copy(plan, style, options).await
+    execute_copy(plan, options).await
 }
 
 pub async fn multiple_copy(
     sources: Vec<PathBuf>,
     destination: PathBuf,
-    style: ProgressBarStyle,
     options: &CopyOptions,
 ) -> io::Result<()> {
     let plan = preprocess_multiple(&sources, &destination, options)?;
     if plan.skipped_files > 0 {
         eprintln!("Skipping {} files that already exist", plan.skipped_files);
     }
-    execute_copy(plan, style, options).await
+    execute_copy(plan, options).await
 }
 
-async fn execute_copy(
-    plan: CopyPlan,
-    style: ProgressBarStyle,
-    options: &CopyOptions,
-) -> io::Result<()> {
+async fn execute_copy(plan: CopyPlan, options: &CopyOptions) -> io::Result<()> {
     if !options.attributes_only {
         create_directories(&plan.directories)?;
     } else {
@@ -129,7 +124,7 @@ async fn execute_copy(
 
     let overall_pb = if plan.total_files >= 1 && !options.interactive && !options.attributes_only {
         let pb = ProgressBar::new(plan.total_size);
-        style.apply(&pb, plan.total_files);
+        options.style.apply(&pb, plan.total_files);
         Some(Arc::new(pb))
     } else {
         None
@@ -146,7 +141,6 @@ async fn execute_copy(
     for file_task in plan.files {
         let sem = semaphore.clone();
         let overall = overall_pb.clone();
-        let style_cloned = style;
         let options_copy = *options;
         let completed = completed_files.clone();
         let total_files = plan.total_files;
@@ -161,7 +155,6 @@ async fn execute_copy(
                 &file_task.source,
                 &file_task.destination,
                 file_task.size,
-                style_cloned,
                 overall.as_deref(),
                 completed.as_ref(),
                 total_files,
@@ -184,7 +177,7 @@ async fn execute_copy(
 
     if let Some(pb) = overall_pb {
         if errors.is_empty() {
-            if matches!(style, ProgressBarStyle::Default) && !options.attributes_only {
+            if matches!(options.style, ProgressBarStyle::Detailed) && !options.attributes_only {
                 pb.finish_with_message(format!("Copied {} files successfully", plan.total_files)); // TODO: see a good message
             } else {
                 pb.finish_with_message("Done".to_string()); // TODO: see a good message
@@ -209,7 +202,6 @@ async fn copy_core(
     source: &Path,
     destination: &Path,
     file_size: u64,
-    style: ProgressBarStyle,
     overall_pb: Option<&ProgressBar>,
     completed_files: &AtomicUsize,
     total_files: usize,
@@ -237,7 +229,7 @@ async fn copy_core(
         Ok(true) => {
             let completed = completed_files.fetch_add(1, Ordering::Relaxed) + 1;
             if let Some(pb) = overall_pb
-                && matches!(style, ProgressBarStyle::Default)
+                && matches!(options.style, ProgressBarStyle::Detailed)
             {
                 pb.set_message(format!("Copying: {}/{} files", completed, total_files));
             }
@@ -308,7 +300,7 @@ async fn copy_core(
     dest_file.flush().await?;
     let completed = completed_files.fetch_add(1, Ordering::Relaxed) + 1;
     if let Some(pb) = overall_pb
-        && matches!(style, ProgressBarStyle::Default)
+        && matches!(options.style, ProgressBarStyle::Detailed)
     {
         pb.set_message(format!("Copying: {}/{} files", completed, total_files));
     }
@@ -322,7 +314,6 @@ async fn copy_core(
 mod tests {
     use super::*;
     use crate::cli::args::{CopyOptions, SymlinkMode};
-    use crate::utility::progress_bar::ProgressBarStyle;
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
@@ -345,9 +336,7 @@ mod tests {
         create_test_file(&source, content).unwrap();
 
         let options = CopyOptions::none();
-        copy(&source, &dest, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source, &dest, &options).await.unwrap();
 
         assert!(dest.exists());
         let dest_content = fs::read(&dest).unwrap();
@@ -364,9 +353,7 @@ mod tests {
         fs::create_dir(&dest_dir).unwrap();
 
         let options = CopyOptions::none();
-        copy(&source, &dest_dir, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source, &dest_dir, &options).await.unwrap();
 
         let dest_file = dest_dir.join("source.txt");
         assert!(dest_file.exists());
@@ -383,9 +370,7 @@ mod tests {
         create_test_file(&source, &content).unwrap();
 
         let options = CopyOptions::none();
-        copy(&source, &dest, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source, &dest, &options).await.unwrap();
 
         assert!(dest.exists());
         assert_eq!(fs::metadata(&dest).unwrap().len(), content.len() as u64);
@@ -400,9 +385,7 @@ mod tests {
         create_test_file(&source, b"").unwrap();
 
         let options = CopyOptions::none();
-        copy(&source, &dest, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source, &dest, &options).await.unwrap();
 
         assert!(dest.exists());
         assert_eq!(fs::metadata(&dest).unwrap().len(), 0);
@@ -425,9 +408,7 @@ mod tests {
         let mut options = CopyOptions::none();
         options.recursive = true;
 
-        copy(&source_dir, &dest_dir, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source_dir, &dest_dir, &options).await.unwrap();
 
         assert!(dest_dir.join("source").is_dir());
         assert!(dest_dir.join("source/file1.txt").exists());
@@ -449,7 +430,7 @@ mod tests {
         fs::create_dir(&source_dir).unwrap();
 
         let options = CopyOptions::none();
-        let result = copy(&source_dir, &dest_dir, ProgressBarStyle::Minimal, &options).await;
+        let result = copy(&source_dir, &dest_dir, &options).await;
 
         assert!(result.is_err());
         assert!(
@@ -472,14 +453,9 @@ mod tests {
         let mut options = CopyOptions::none();
         options.recursive = true;
 
-        copy(
-            &temp_dir.path().join("a"),
-            &dest,
-            ProgressBarStyle::Minimal,
-            &options,
-        )
-        .await
-        .unwrap();
+        copy(&temp_dir.path().join("a"), &dest, &options)
+            .await
+            .unwrap();
 
         assert!(dest.join("a/b/c/d/deep.txt").exists());
     }
@@ -501,14 +477,9 @@ mod tests {
         let sources = vec![file1, file2, file3];
         let options = CopyOptions::none();
 
-        multiple_copy(
-            sources,
-            dest_dir.clone(),
-            ProgressBarStyle::Minimal,
-            &options,
-        )
-        .await
-        .unwrap();
+        multiple_copy(sources, dest_dir.clone(), &options)
+            .await
+            .unwrap();
 
         assert!(dest_dir.join("file1.txt").exists());
         assert!(dest_dir.join("file2.txt").exists());
@@ -532,14 +503,9 @@ mod tests {
         let mut options = CopyOptions::none();
         options.recursive = true;
 
-        multiple_copy(
-            sources,
-            dest_dir.clone(),
-            ProgressBarStyle::Minimal,
-            &options,
-        )
-        .await
-        .unwrap();
+        multiple_copy(sources, dest_dir.clone(), &options)
+            .await
+            .unwrap();
 
         assert!(dest_dir.join("file.txt").exists());
         assert!(dest_dir.join("dir1/file_in_dir.txt").exists());
@@ -557,9 +523,7 @@ mod tests {
         let mut options = CopyOptions::none();
         options.force = true;
 
-        copy(&source, &dest, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source, &dest, &options).await.unwrap();
 
         assert_eq!(fs::read(&dest).unwrap(), b"new content");
     }
@@ -582,7 +546,7 @@ mod tests {
         }
 
         let options = CopyOptions::none();
-        let result = copy(&source, &dest, ProgressBarStyle::Minimal, &options).await;
+        let result = copy(&source, &dest, &options).await;
 
         #[cfg(unix)]
         {
@@ -607,9 +571,7 @@ mod tests {
         let mut options = CopyOptions::none();
         options.remove_destination = true;
 
-        copy(&source, &dest, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source, &dest, &options).await.unwrap();
 
         assert_eq!(fs::read(&dest).unwrap(), b"new content");
     }
@@ -632,9 +594,7 @@ mod tests {
         options.recursive = true;
         options.resume = true;
 
-        copy(&source_dir, &dest_dir, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source_dir, &dest_dir, &options).await.unwrap();
 
         assert!(dest_dir.join("source/file1.txt").exists());
         assert!(dest_dir.join("source/file2.txt").exists());
@@ -652,9 +612,7 @@ mod tests {
         let mut options = CopyOptions::none();
         options.hard_link = true;
 
-        copy(&source, &dest, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source, &dest, &options).await.unwrap();
 
         assert!(dest.exists());
 
@@ -682,14 +640,9 @@ mod tests {
         let mut options = CopyOptions::none();
         options.hard_link = true;
 
-        multiple_copy(
-            sources,
-            dest_dir.clone(),
-            ProgressBarStyle::Minimal,
-            &options,
-        )
-        .await
-        .unwrap();
+        multiple_copy(sources, dest_dir.clone(), &options)
+            .await
+            .unwrap();
 
         assert_eq!(
             fs::metadata(&file1).unwrap().ino(),
@@ -715,9 +668,7 @@ mod tests {
         options.hard_link = true;
         options.recursive = true;
 
-        copy(&source_dir, &dest_dir, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source_dir, &dest_dir, &options).await.unwrap();
 
         let source_file = source_dir.join("file.txt");
         let dest_file = dest_dir.join("source/file.txt");
@@ -742,9 +693,7 @@ mod tests {
         options.hard_link = true;
         options.force = true;
 
-        copy(&source, &dest, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source, &dest, &options).await.unwrap();
 
         assert_eq!(
             fs::metadata(&source).unwrap().ino(),
@@ -764,9 +713,7 @@ mod tests {
         let mut options = CopyOptions::none();
         options.symbolic_link = Some(SymlinkMode::Auto);
 
-        copy(&source, &dest, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source, &dest, &options).await.unwrap();
 
         assert!(dest.exists());
         assert!(dest.symlink_metadata().unwrap().is_symlink());
@@ -784,9 +731,7 @@ mod tests {
         let mut options = CopyOptions::none();
         options.symbolic_link = Some(SymlinkMode::Absolute);
 
-        copy(&source, &dest, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source, &dest, &options).await.unwrap();
 
         let link_target = fs::read_link(&dest).unwrap();
         assert!(link_target.is_absolute());
@@ -806,9 +751,7 @@ mod tests {
         let mut options = CopyOptions::none();
         options.symbolic_link = Some(SymlinkMode::Relative);
 
-        copy(&source, &dest, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source, &dest, &options).await.unwrap();
 
         let link_target = fs::read_link(&dest).unwrap();
         assert!(!link_target.is_absolute());
@@ -828,9 +771,7 @@ mod tests {
         options.symbolic_link = Some(SymlinkMode::Auto);
         options.recursive = true;
 
-        copy(&source_dir, &dest_dir, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source_dir, &dest_dir, &options).await.unwrap();
 
         assert!(
             dest_dir
@@ -848,7 +789,7 @@ mod tests {
         let dest = temp_dir.path().join("dest.txt");
 
         let options = CopyOptions::none();
-        let result = copy(&source, &dest, ProgressBarStyle::Minimal, &options).await;
+        let result = copy(&source, &dest, &options).await;
 
         assert!(result.is_err());
     }
@@ -865,7 +806,7 @@ mod tests {
         let mut options = CopyOptions::none();
         options.recursive = true;
 
-        let result = copy(&source_dir, &dest_file, ProgressBarStyle::Minimal, &options).await;
+        let result = copy(&source_dir, &dest_file, &options).await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("file"));
@@ -887,14 +828,9 @@ mod tests {
         let mut options = CopyOptions::none();
         options.concurrency = 4;
 
-        multiple_copy(
-            sources,
-            dest_dir.clone(),
-            ProgressBarStyle::Minimal,
-            &options,
-        )
-        .await
-        .unwrap();
+        multiple_copy(sources, dest_dir.clone(), &options)
+            .await
+            .unwrap();
 
         for i in 0..10 {
             assert!(dest_dir.join(format!("file{}.txt", i)).exists());
@@ -912,12 +848,8 @@ mod tests {
 
         let options = CopyOptions::none();
 
-        copy(&source, &dest1, ProgressBarStyle::Default, &options)
-            .await
-            .unwrap();
-        copy(&source, &dest2, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source, &dest1, &options).await.unwrap();
+        copy(&source, &dest2, &options).await.unwrap();
 
         assert!(dest1.exists());
         assert!(dest2.exists());
@@ -932,9 +864,7 @@ mod tests {
         create_test_file(&source, b"content").unwrap();
 
         let options = CopyOptions::none();
-        copy(&source, &dest, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source, &dest, &options).await.unwrap();
 
         assert!(dest.exists());
     }
@@ -949,9 +879,7 @@ mod tests {
         create_test_file(&source, &content).unwrap();
 
         let options = CopyOptions::none();
-        copy(&source, &dest, ProgressBarStyle::Minimal, &options)
-            .await
-            .unwrap();
+        copy(&source, &dest, &options).await.unwrap();
 
         assert_eq!(
             fs::metadata(&source).unwrap().len(),

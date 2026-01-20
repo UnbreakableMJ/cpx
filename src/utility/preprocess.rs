@@ -1,5 +1,5 @@
 use super::helper::with_parents;
-use crate::cli::args::{CopyOptions, SymlinkMode};
+use crate::cli::args::{CopyOptions, FollowSymlink, SymlinkMode};
 use jwalk::WalkDir;
 use std::fs::Metadata;
 use std::io;
@@ -217,17 +217,10 @@ pub fn preprocess_file(
     } else if let Some(mode) = options.symbolic_link {
         let use_absolute = should_use_absolute(source, mode);
         plan.add_symlink(source.to_path_buf(), dest_path, use_absolute);
+    } else if options.resume && should_skip_file(source, &dest_path)? {
+        plan.mark_skipped(source_metadata.len());
     } else {
-        let actual_size = if source_metadata.is_symlink() {
-            std::fs::metadata(source)?.len()
-        } else {
-            source_metadata.len()
-        };
-        if options.resume && should_skip_file(source, &dest_path)? {
-            plan.mark_skipped(actual_size);
-        } else {
-            plan.add_file(source.to_path_buf(), dest_path, actual_size);
-        }
+        plan.add_file(source.to_path_buf(), dest_path, source_metadata.len());
     }
     Ok(plan)
 }
@@ -248,9 +241,26 @@ pub fn preprocess_directory(
         };
     plan.add_directory(Some(source.into()), root_destination.clone());
     let num_threads = num_cpus::get().min(8);
-    for entry in WalkDir::new(source)
+    let follow_symlink = match options.follow_symlink {
+        FollowSymlink::NoDereference | FollowSymlink::CommandLineSymlink => false,
+        FollowSymlink::Dereference => true,
+    };
+    let walk_root = match options.follow_symlink {
+        FollowSymlink::CommandLineSymlink => {
+            let meta = std::fs::symlink_metadata(source)?;
+            if meta.file_type().is_symlink() {
+                std::fs::canonicalize(source)?
+            } else {
+                source.to_path_buf()
+            }
+        }
+        _ => source.to_path_buf(),
+    };
+
+    for entry in WalkDir::new(&walk_root)
         .skip_hidden(false)
         .parallelism(jwalk::Parallelism::RayonNewPool(num_threads))
+        .follow_links(follow_symlink)
     {
         let entry = entry?;
         let src_path = entry.path();
@@ -266,7 +276,17 @@ pub fn preprocess_directory(
         })?;
         let dest_path = root_destination.join(relative);
         let metadata = entry.metadata()?;
-        if metadata.is_dir() {
+        if metadata.file_type().is_symlink() {
+            if !matches!(options.follow_symlink, FollowSymlink::Dereference) {
+                let use_absolute = if let Some(mode) = options.symbolic_link {
+                    should_use_absolute(&src_path, mode)
+                } else {
+                    false
+                };
+
+                plan.add_symlink(src_path.to_path_buf(), dest_path, use_absolute);
+            }
+        } else if metadata.is_dir() {
             plan.add_directory(Some(src_path.to_path_buf()), dest_path);
         } else if metadata.is_file() {
             if options.hard_link {
@@ -300,9 +320,14 @@ pub fn preprocess_multiple(
 
     let mut plan = CopyPlan::new();
     for source in sources {
-        let symlink_metadata = std::fs::symlink_metadata(source)?;
+        let metadata = match options.follow_symlink {
+            FollowSymlink::Dereference | FollowSymlink::CommandLineSymlink => {
+                std::fs::metadata(source)?
+            }
+            FollowSymlink::NoDereference => std::fs::symlink_metadata(source)?,
+        };
 
-        if symlink_metadata.is_dir() {
+        if metadata.is_dir() {
             let dir_plan = preprocess_directory(source, destination, options)?;
             plan.files.extend(dir_plan.files);
             plan.directories.extend(dir_plan.directories);
@@ -331,18 +356,10 @@ pub fn preprocess_multiple(
             } else if let Some(mode) = options.symbolic_link {
                 let use_absolute = should_use_absolute(source, mode);
                 plan.add_symlink(source.to_path_buf(), dest_path, use_absolute);
+            } else if options.resume && should_skip_file(source, &dest_path)? {
+                plan.mark_skipped(metadata.len());
             } else {
-                let actual_size = if symlink_metadata.is_symlink() {
-                    std::fs::metadata(source)?.len()
-                } else {
-                    symlink_metadata.len()
-                };
-
-                if options.resume && should_skip_file(source, &dest_path)? {
-                    plan.mark_skipped(actual_size);
-                } else {
-                    plan.add_file(source.clone(), dest_path, actual_size);
-                }
+                plan.add_file(source.clone(), dest_path, metadata.len());
             }
         }
     }
