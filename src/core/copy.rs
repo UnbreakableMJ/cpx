@@ -234,6 +234,45 @@ async fn copy_core(
         let _ = tokio::fs::remove_file(destination).await;
     }
 
+    if let Some(reflink_mode) = options.reflink {
+        use crate::cli::args::ReflinkMode;
+        if reflink_mode != ReflinkMode::Never {
+            if tokio::fs::try_exists(destination).await.unwrap_or(false) {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!(
+                        "cannot reflink '{}' to '{}': destination exists",
+                        source.display(),
+                        destination.display()
+                    ),
+                ));
+            }
+
+            match reflink_copy::reflink(source, destination) {
+                Ok(()) => {
+                    if let Some(pb) = overall_pb {
+                        pb.inc(file_size);
+                    }
+                    let completed = completed_files.fetch_add(1, Ordering::Relaxed) + 1;
+                    if let Some(pb) = overall_pb
+                        && matches!(options.style, ProgressBarStyle::Detailed)
+                    {
+                        pb.set_message(format!("Copying: {}/{} files", completed, total_files));
+                    }
+                    if options.preserve != PreserveAttr::none() {
+                        preserve::apply_preserve_attrs(source, destination, options.preserve)
+                            .await?;
+                    }
+                    return Ok(());
+                }
+                Err(e) if reflink_mode == ReflinkMode::Always => {
+                    return Err(io::Error::new(io::ErrorKind::Unsupported, e));
+                }
+                Err(_) => {} // Auto fallback
+            }
+        }
+    }
+
     #[cfg(target_os = "linux")]
     match fast_copy(source, destination, file_size, overall_pb, options) {
         Ok(true) => {

@@ -1,5 +1,4 @@
 use crate::cli::args::BackupMode;
-use jwalk::WalkDir;
 use std::io;
 use std::path::{Path, PathBuf};
 const DEFAULT_SUFFIX: &str = "~";
@@ -29,24 +28,17 @@ fn find_max_backup_number(path: &Path) -> io::Result<u32> {
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid file name"))?
         .to_string_lossy();
+    let pattern_prefix = format!("{}.~", file_name);
 
-    let file_name_str = file_name.as_ref();
-    let pattern_prefix = format!("{}.~", file_name_str);
     let mut max_number = 0u32;
-    let num_threads = num_cpus::get().min(8);
-    for entry in WalkDir::new(parent)
-        .max_depth(1)
-        .skip_hidden(false)
-        .parallelism(jwalk::Parallelism::RayonNewPool(num_threads))
-        .into_iter()
-        .flatten()
-    {
-        let entry_name = entry.file_name.to_string_lossy();
-        if entry.depth == 0 {
-            continue;
-        }
-        if entry_name.starts_with(&pattern_prefix) && entry_name.ends_with('~') {
-            let num_part = &entry_name[pattern_prefix.len()..entry_name.len() - 1];
+
+    for entry in std::fs::read_dir(parent)? {
+        let entry = entry?;
+        let entry_name = entry.file_name();
+        let entry_name_str = entry_name.to_string_lossy();
+
+        if entry_name_str.starts_with(&pattern_prefix) && entry_name_str.ends_with('~') {
+            let num_part = &entry_name_str[pattern_prefix.len()..entry_name_str.len() - 1];
             if let Ok(num) = num_part.parse::<u32>() {
                 max_number = max_number.max(num);
             }

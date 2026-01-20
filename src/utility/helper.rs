@@ -1,13 +1,15 @@
 use crate::cli::args::CopyOptions;
 use crate::utility::preprocess::HardlinkTask;
 
-use super::preprocess::SymlinkTask;
+use super::preprocess::{SymlinkKind, SymlinkTask};
 use std::io;
 use std::path::{Path, PathBuf};
 
 pub fn create_directories(dirs: &[crate::utility::preprocess::DirectoryTask]) -> io::Result<()> {
     let mut dirs: Vec<_> = dirs.iter().collect();
-    dirs.sort_by_key(|d| d.destination.components().count());
+    dirs.sort_unstable_by_key(|d| d.destination.components().count()); // unstable is faster
+
+    dirs.dedup_by_key(|d| &d.destination);
     for dir in &dirs {
         match std::fs::create_dir(&dir.destination) {
             Ok(()) => {}
@@ -22,19 +24,20 @@ pub fn create_directories(dirs: &[crate::utility::preprocess::DirectoryTask]) ->
 }
 
 pub async fn create_symlink(task: &SymlinkTask) -> io::Result<()> {
-    let target = if task.use_absolute {
-        task.source.canonicalize()?
-    } else {
-        let dest_parent = task.destination.parent().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "Invalid destination path")
-        })?;
-
-        pathdiff::diff_paths(&task.source, dest_parent).ok_or_else(|| {
-            io::Error::other(format!(
-                "Cannot create relative path from {:?} to {:?}",
-                dest_parent, task.source
-            ))
-        })?
+    let target = match task.kind {
+        SymlinkKind::PreserveExact => task.source.clone(),
+        SymlinkKind::AbsoluteToSource => task.source.canonicalize()?,
+        SymlinkKind::RelativeToSource => {
+            let dest_parent = task.destination.parent().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "Invalid destination path")
+            })?;
+            pathdiff::diff_paths(&task.source, dest_parent).ok_or_else(|| {
+                io::Error::other(format!(
+                    "Cannot create relative path from {:?} to {:?}",
+                    dest_parent, task.source
+                ))
+            })?
+        }
     };
 
     #[cfg(unix)]
@@ -44,9 +47,9 @@ pub async fn create_symlink(task: &SymlinkTask) -> io::Result<()> {
 
     #[cfg(windows)]
     {
-        // On Windows, we need to know if it's a file or directory
-        let metadata = tokio::fs::metadata(&task.source).await?;
-        if metadata.is_dir() {
+        // Minimal: check target type (handles broken as file)
+        let meta = tokio::fs::metadata(&target).await.ok();
+        if meta.as_ref().map_or(false, |m| m.is_dir()) {
             tokio::fs::symlink_dir(&target, &task.destination).await?;
         } else {
             tokio::fs::symlink_file(&target, &task.destination).await?;
@@ -230,7 +233,7 @@ mod tests {
         let task = SymlinkTask {
             source: source.clone(),
             destination: dest.clone(),
-            use_absolute: true,
+            kind: SymlinkKind::AbsoluteToSource,
         };
 
         create_symlink(&task).await.unwrap();
@@ -256,7 +259,7 @@ mod tests {
         let task = SymlinkTask {
             source: source.clone(),
             destination: dest.clone(),
-            use_absolute: false,
+            kind: SymlinkKind::RelativeToSource,
         };
 
         create_symlink(&task).await.unwrap();
@@ -282,7 +285,7 @@ mod tests {
         let task = SymlinkTask {
             source: source_dir.clone(),
             destination: dest_link.clone(),
-            use_absolute: true,
+            kind: SymlinkKind::AbsoluteToSource,
         };
 
         create_symlink(&task).await.unwrap();
@@ -306,7 +309,7 @@ mod tests {
         let task = SymlinkTask {
             source: source.clone(),
             destination: dest.clone(),
-            use_absolute: false,
+            kind: SymlinkKind::RelativeToSource,
         };
 
         create_symlink(&task).await.unwrap();
@@ -327,7 +330,7 @@ mod tests {
         let task = SymlinkTask {
             source: source.clone(),
             destination: dest.clone(),
-            use_absolute: true,
+            kind: SymlinkKind::AbsoluteToSource,
         };
 
         let result = create_symlink(&task).await;
@@ -344,7 +347,7 @@ mod tests {
         let task = SymlinkTask {
             source: source.clone(),
             destination: dest.clone(),
-            use_absolute: false,
+            kind: SymlinkKind::RelativeToSource,
         };
 
         create_symlink(&task).await.unwrap();

@@ -10,6 +10,13 @@ pub enum SymlinkMode {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
+pub enum ReflinkMode {
+    Always,
+    Auto,
+    Never,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
 pub enum BackupMode {
     None,
     Numbered,
@@ -144,6 +151,15 @@ pub struct CLIArgs {
         help = "make a backup of each existing destination file (none, numbered, existing, simple)"
     )]
     pub backup: Option<BackupMode>,
+
+    #[arg(
+        long = "reflink",
+        value_name = "WHEN",
+        default_missing_value = "auto",
+        num_args = 0..=1,
+        help = "control clone/CoW copies (auto, always, never)"
+    )]
+    pub reflink: Option<ReflinkMode>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -162,6 +178,7 @@ pub struct CopyOptions {
     pub follow_symlink: FollowSymlink,
     pub style: ProgressBarStyle,
     pub backup: Option<BackupMode>,
+    pub reflink: Option<ReflinkMode>,
 }
 
 impl CopyOptions {
@@ -181,6 +198,7 @@ impl CopyOptions {
             follow_symlink: FollowSymlink::NoDereference,
             style: ProgressBarStyle::Default,
             backup: None,
+            reflink: None,
         }
     }
 }
@@ -207,6 +225,7 @@ impl From<&CLIArgs> for CopyOptions {
             follow_symlink: FollowSymlink::NoDereference,
             style: cli.style,
             backup: cli.backup,
+            reflink: cli.reflink,
         }
     }
 }
@@ -229,6 +248,15 @@ impl CLIArgs {
         let follow_symlink = self.follow_symlink_mode()?;
         let mut options = CopyOptions::from(&self);
         options.follow_symlink = follow_symlink;
+
+        if options.reflink.is_some() {
+            if options.hard_link {
+                return Err("--reflink and --link cannot be used together".to_string());
+            }
+            if options.symbolic_link.is_some() {
+                return Err("--reflink and --symbolic-link cannot be used together".to_string());
+            }
+        }
 
         if options.symbolic_link.is_some() {
             if options.hard_link {
@@ -292,6 +320,7 @@ mod tests {
             no_dereference: false,
             dereference_command_line: false,
             backup: None,
+            reflink: None,
         };
 
         let result = args.validate();
@@ -321,6 +350,7 @@ mod tests {
             no_dereference: false,
             dereference_command_line: false,
             backup: None,
+            reflink: None,
         };
 
         let result = args.validate();
@@ -350,6 +380,7 @@ mod tests {
             no_dereference: false,
             dereference_command_line: false,
             backup: None,
+            reflink: None,
         };
 
         let result = args.validate();
@@ -379,6 +410,7 @@ mod tests {
             no_dereference: false,
             dereference_command_line: false,
             backup: None,
+            reflink: None,
         };
 
         let result = args.validate();

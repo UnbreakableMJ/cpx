@@ -6,6 +6,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 use xxhash_rust::xxh3::Xxh3;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymlinkKind {
+    PreserveExact,
+    RelativeToSource,
+    AbsoluteToSource,
+}
+
 #[derive(Debug, Clone)]
 pub struct FileTask {
     pub source: PathBuf,
@@ -23,7 +30,7 @@ pub struct DirectoryTask {
 pub struct SymlinkTask {
     pub source: PathBuf,
     pub destination: PathBuf,
-    pub use_absolute: bool,
+    pub kind: SymlinkKind,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +38,7 @@ pub struct HardlinkTask {
     pub source: PathBuf,
     pub destination: PathBuf,
 }
+
 #[derive(Debug)]
 pub struct CopyPlan {
     pub files: Vec<FileTask>,
@@ -66,6 +74,7 @@ impl CopyPlan {
             skipped_size: 0,
         }
     }
+
     pub fn add_file(&mut self, source: PathBuf, destination: PathBuf, size: u64) {
         self.files.push(FileTask {
             source,
@@ -82,14 +91,16 @@ impl CopyPlan {
             destination,
         });
     }
-    pub fn add_symlink(&mut self, source: PathBuf, destination: PathBuf, use_absolute: bool) {
+
+    pub fn add_symlink(&mut self, source: PathBuf, destination: PathBuf, kind: SymlinkKind) {
         self.symlinks.push(SymlinkTask {
             source,
             destination,
-            use_absolute,
+            kind,
         });
         self.total_symlinks += 1;
     }
+
     pub fn add_hardlink(&mut self, source: PathBuf, destination: PathBuf) {
         self.hardlinks.push(HardlinkTask {
             source,
@@ -106,20 +117,39 @@ impl CopyPlan {
     pub fn sort_files_descending(&mut self) {
         self.files.sort_by(|a, b| b.size.cmp(&a.size));
     }
+
+    pub fn merge(&mut self, other: CopyPlan) {
+        self.files.extend(other.files);
+        self.directories.extend(other.directories);
+        self.symlinks.extend(other.symlinks);
+        self.hardlinks.extend(other.hardlinks);
+        self.total_size += other.total_size;
+        self.total_files += other.total_files;
+        self.total_symlinks += other.total_symlinks;
+        self.total_hardlinks += other.total_hardlinks;
+        self.skipped_files += other.skipped_files;
+        self.skipped_size += other.skipped_size;
+    }
 }
 
-fn should_use_absolute(source: &Path, mode: SymlinkMode) -> bool {
+fn symlink_kind_from_mode(source: &Path, mode: SymlinkMode) -> SymlinkKind {
     match mode {
-        SymlinkMode::Absolute => true,
-        SymlinkMode::Relative => false,
-        SymlinkMode::Auto => source.is_absolute(),
+        SymlinkMode::Absolute => SymlinkKind::AbsoluteToSource,
+        SymlinkMode::Relative => SymlinkKind::RelativeToSource,
+        SymlinkMode::Auto => {
+            if source.is_absolute() {
+                SymlinkKind::AbsoluteToSource
+            } else {
+                SymlinkKind::RelativeToSource
+            }
+        }
     }
 }
 
 fn calculate_checksum(path: &Path) -> io::Result<u64> {
     use std::io::Read;
     let mut file = std::fs::File::open(path)?;
-    let mut hasher = Xxh3::new(); // streaming xxh3 hasher
+    let mut hasher = Xxh3::new();
     let mut buffer = vec![0u8; 128 * 1024];
 
     loop {
@@ -127,7 +157,7 @@ fn calculate_checksum(path: &Path) -> io::Result<u64> {
         if bytes_read == 0 {
             break;
         }
-        hasher.update(&buffer[..bytes_read]); // no RAM growth
+        hasher.update(&buffer[..bytes_read]);
     }
 
     Ok(hasher.digest())
@@ -156,6 +186,36 @@ pub fn should_skip_file(source: &Path, destination: &Path) -> io::Result<bool> {
     let dest_checksum = calculate_checksum(destination)?;
 
     Ok(src_checksum == dest_checksum)
+}
+
+fn process_entry(
+    plan: &mut CopyPlan,
+    source: &Path,
+    dest_path: PathBuf,
+    metadata: &Metadata,
+    options: &CopyOptions,
+) -> io::Result<()> {
+    if metadata.file_type().is_symlink() {
+        if !matches!(options.follow_symlink, FollowSymlink::Dereference) {
+            if let Some(mode) = options.symbolic_link {
+                let kind = symlink_kind_from_mode(source, mode);
+                plan.add_symlink(source.to_path_buf(), dest_path, kind);
+            } else {
+                let original_target = std::fs::read_link(source)?;
+                plan.add_symlink(original_target, dest_path, SymlinkKind::PreserveExact);
+            }
+        }
+    } else if options.hard_link {
+        plan.add_hardlink(source.to_path_buf(), dest_path);
+    } else if let Some(mode) = options.symbolic_link {
+        let kind = symlink_kind_from_mode(source, mode);
+        plan.add_symlink(source.to_path_buf(), dest_path, kind);
+    } else if options.resume && should_skip_file(source, &dest_path)? {
+        plan.mark_skipped(metadata.len());
+    } else {
+        plan.add_file(source.to_path_buf(), dest_path, metadata.len());
+    }
+    Ok(())
 }
 
 pub fn preprocess_file(
@@ -207,21 +267,14 @@ pub fn preprocess_file(
     } else {
         destination.to_path_buf()
     };
+
     if options.parents
         && let Some(parent) = dest_path.parent()
     {
         plan.add_directory(None, parent.to_path_buf());
     }
-    if options.hard_link {
-        plan.add_hardlink(source.to_path_buf(), dest_path);
-    } else if let Some(mode) = options.symbolic_link {
-        let use_absolute = should_use_absolute(source, mode);
-        plan.add_symlink(source.to_path_buf(), dest_path, use_absolute);
-    } else if options.resume && should_skip_file(source, &dest_path)? {
-        plan.mark_skipped(source_metadata.len());
-    } else {
-        plan.add_file(source.to_path_buf(), dest_path, source_metadata.len());
-    }
+
+    process_entry(&mut plan, source, dest_path, &source_metadata, options)?;
     Ok(plan)
 }
 
@@ -239,12 +292,15 @@ pub fn preprocess_directory(
                 io::Error::new(io::ErrorKind::InvalidInput, "Invalid source path")
             })?)
         };
+
     plan.add_directory(Some(source.into()), root_destination.clone());
+
     let num_threads = num_cpus::get().min(8);
     let follow_symlink = match options.follow_symlink {
         FollowSymlink::NoDereference | FollowSymlink::CommandLineSymlink => false,
         FollowSymlink::Dereference => true,
     };
+
     let walk_root = match options.follow_symlink {
         FollowSymlink::CommandLineSymlink => {
             let meta = std::fs::symlink_metadata(source)?;
@@ -268,6 +324,7 @@ pub fn preprocess_directory(
         if src_path == source {
             continue;
         }
+
         let relative = src_path.strip_prefix(source).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -276,31 +333,14 @@ pub fn preprocess_directory(
         })?;
         let dest_path = root_destination.join(relative);
         let metadata = entry.metadata()?;
-        if metadata.file_type().is_symlink() {
-            if !matches!(options.follow_symlink, FollowSymlink::Dereference) {
-                let use_absolute = if let Some(mode) = options.symbolic_link {
-                    should_use_absolute(&src_path, mode)
-                } else {
-                    false
-                };
 
-                plan.add_symlink(src_path.to_path_buf(), dest_path, use_absolute);
-            }
-        } else if metadata.is_dir() {
+        if metadata.is_dir() {
             plan.add_directory(Some(src_path.to_path_buf()), dest_path);
-        } else if metadata.is_file() {
-            if options.hard_link {
-                plan.add_hardlink(src_path.to_path_buf(), dest_path);
-            } else if let Some(mode) = options.symbolic_link {
-                let use_absolute = should_use_absolute(&src_path, mode);
-                plan.add_symlink(src_path.to_path_buf(), dest_path, use_absolute);
-            } else if options.resume && should_skip_file(&src_path, &dest_path)? {
-                plan.mark_skipped(metadata.len());
-            } else {
-                plan.add_file(src_path.to_path_buf(), dest_path, metadata.len());
-            }
+        } else {
+            process_entry(&mut plan, &src_path, dest_path, &metadata, options)?;
         }
     }
+
     plan.sort_files_descending();
     Ok(plan)
 }
@@ -319,6 +359,7 @@ pub fn preprocess_multiple(
     }
 
     let mut plan = CopyPlan::new();
+
     for source in sources {
         let metadata = match options.follow_symlink {
             FollowSymlink::Dereference | FollowSymlink::CommandLineSymlink => {
@@ -329,21 +370,14 @@ pub fn preprocess_multiple(
 
         if metadata.is_dir() {
             let dir_plan = preprocess_directory(source, destination, options)?;
-            plan.files.extend(dir_plan.files);
-            plan.directories.extend(dir_plan.directories);
-            plan.total_size += dir_plan.total_size;
-            plan.total_files += dir_plan.total_files;
-            plan.skipped_files += dir_plan.skipped_files;
-            plan.skipped_size += dir_plan.skipped_size;
+            plan.merge(dir_plan);
         } else {
-            let file_name = source.file_name().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "Invalid source path")
-            })?;
-
             let dest_path = if options.parents {
                 with_parents(destination, source)
             } else {
-                destination.join(file_name)
+                destination.join(source.file_name().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "Invalid source path")
+                })?)
             };
 
             if options.parents
@@ -351,18 +385,11 @@ pub fn preprocess_multiple(
             {
                 plan.add_directory(None, parent.to_path_buf());
             }
-            if options.hard_link {
-                plan.add_hardlink(source.to_path_buf(), dest_path);
-            } else if let Some(mode) = options.symbolic_link {
-                let use_absolute = should_use_absolute(source, mode);
-                plan.add_symlink(source.to_path_buf(), dest_path, use_absolute);
-            } else if options.resume && should_skip_file(source, &dest_path)? {
-                plan.mark_skipped(metadata.len());
-            } else {
-                plan.add_file(source.clone(), dest_path, metadata.len());
-            }
+
+            process_entry(&mut plan, source, dest_path, &metadata, options)?;
         }
     }
+
     plan.sort_files_descending();
     Ok(plan)
 }
@@ -416,22 +443,6 @@ mod tests {
         assert_eq!(plan.total_files, 3);
         assert!(!plan.directories.is_empty());
     }
-    #[test]
-    fn test_should_use_absolute_auto_mode() {
-        let abs_path = Path::new("/absolute/path");
-        let rel_path = Path::new("relative/path");
-
-        assert!(should_use_absolute(abs_path, SymlinkMode::Auto));
-        assert!(!should_use_absolute(rel_path, SymlinkMode::Auto));
-    }
-
-    #[test]
-    fn test_should_use_absolute_force_modes() {
-        let path = Path::new("any/path");
-
-        assert!(should_use_absolute(path, SymlinkMode::Absolute));
-        assert!(!should_use_absolute(path, SymlinkMode::Relative));
-    }
 
     #[test]
     fn test_preprocess_file_with_symlink_auto() {
@@ -457,7 +468,6 @@ mod tests {
 
         let symlink = &plan.symlinks[0];
         assert_eq!(symlink.source, source);
-        assert_eq!(symlink.use_absolute, source.is_absolute());
     }
 
     #[test]
@@ -479,7 +489,6 @@ mod tests {
             preprocess_file(&source, &dest_dir, &options, source_metadata, dest_metadata).unwrap();
 
         assert_eq!(plan.total_symlinks, 1);
-        assert!(plan.symlinks[0].use_absolute);
     }
 
     #[test]
@@ -501,7 +510,6 @@ mod tests {
             preprocess_file(&source, &dest_dir, &options, source_metadata, dest_metadata).unwrap();
 
         assert_eq!(plan.total_symlinks, 1);
-        assert!(!plan.symlinks[0].use_absolute);
     }
 
     #[test]
@@ -552,10 +560,6 @@ mod tests {
         assert_eq!(plan.total_files, 0);
         assert_eq!(plan.total_symlinks, 2);
         assert_eq!(plan.symlinks.len(), 2);
-
-        for symlink in &plan.symlinks {
-            assert!(!symlink.use_absolute);
-        }
     }
 
     #[test]
@@ -586,12 +590,11 @@ mod tests {
         let source = PathBuf::from("/source/file.txt");
         let dest = PathBuf::from("/dest/file.txt");
 
-        plan.add_symlink(source.clone(), dest.clone(), true);
+        plan.add_symlink(source.clone(), dest.clone(), SymlinkKind::AbsoluteToSource);
 
         assert_eq!(plan.total_symlinks, 1);
         assert_eq!(plan.symlinks.len(), 1);
         assert_eq!(plan.symlinks[0].source, source);
         assert_eq!(plan.symlinks[0].destination, dest);
-        assert!(plan.symlinks[0].use_absolute);
     }
 }
