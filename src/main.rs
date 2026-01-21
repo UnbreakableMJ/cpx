@@ -3,8 +3,7 @@ use cpx::cli::args::CLIArgs;
 use cpx::core::copy::{copy, multiple_copy};
 use std::process;
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let args = CLIArgs::parse();
     let (sources, destination, options) = match args.validate() {
         Ok(validated) => validated,
@@ -14,9 +13,9 @@ async fn main() {
         }
     };
     let result = if sources.len() == 1 {
-        copy(&sources[0], &destination, &options).await
+        copy(&sources[0], &destination, &options)
     } else {
-        multiple_copy(sources, destination, &options).await
+        multiple_copy(sources, destination, &options)
     };
 
     if let Err(e) = result {

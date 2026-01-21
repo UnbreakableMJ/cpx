@@ -1,6 +1,7 @@
 use crate::cli::args::BackupMode;
 use std::io;
 use std::path::{Path, PathBuf};
+
 const DEFAULT_SUFFIX: &str = "~";
 
 pub fn generate_backup_path(destination: &Path, mode: BackupMode) -> io::Result<PathBuf> {
@@ -60,10 +61,9 @@ fn format_numbered_backup(path: &Path, number: u32) -> PathBuf {
     PathBuf::from(path_str)
 }
 
-pub async fn create_backup(destination: &Path, backup_path: &PathBuf) -> io::Result<()> {
-    tokio::fs::rename(destination, backup_path).await
+pub fn create_backup(destination: &Path, backup_path: &PathBuf) -> io::Result<()> {
+    std::fs::rename(destination, backup_path)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
