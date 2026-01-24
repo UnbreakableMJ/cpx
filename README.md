@@ -42,7 +42,7 @@ Copying 51% ██████████████████████�
 - **Rust** 1.70 or later
 
 
-### Quick Install (Recommended)
+### Quick Install 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/11happy/cpx/main/install.sh | bash
 ```
