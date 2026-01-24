@@ -1,6 +1,11 @@
 [package]
 name = "cpx"
+description = "A modern, fast file copying tool"
+repository = "https://github.com/11happy/cpx"
+readme = "README.md"
+keywords = ["copy", "file", "cli", "backup", "utility"]
 version = "0.1.0"
+license = "MIT"
 edition = "2024"
 
 [dependencies]
