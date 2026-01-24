@@ -6,9 +6,8 @@
 
 [![Crates.io](https://img.shields.io/crates/v/cpx.svg)](https://crates.io/crates/cpx)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
-[![CI](https://github.com/11happy/cpx/actions/workflows/ci.yml/badge.svg)](
-https://github.com/11happy/cpx/actions/workflows/ci.yml
-)
+[![CI](https://github.com/11happy/cpx/actions/workflows/ci.yml/badge.svg)](https://github.com/11happy/cpx/actions/workflows/ci.yml)
+
 
 [Features](#features) •
 [Installation](#installation) •
@@ -52,7 +51,7 @@ cargo install --path .
 cpx --version
 ```
 
-### From Crates.io (Coming Soon)
+### From Crates.io
 ```bash
 cargo install cpx
 ```
