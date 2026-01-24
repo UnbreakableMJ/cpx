@@ -30,7 +30,7 @@ Copying 51% ██████████████████████�
 
 ### 🚀 **Performance First**
 - 🚀 Fast parallel copying (upto 5x faster than cp [benchmarks](docs/benchmarks.md))
-- 📊 Beautiful progress bars (customisable)
+- 📊 Beautiful progress bars (customizable)
 - ⏸️ Resume interrupted transfers
 - 🎯 Exclude patterns (gitignore-style)
 - ⚙️ Flexible configuration
