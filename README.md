@@ -35,31 +35,13 @@ Copying 51% ████░░░░ ETA:00:06
 ## Features
 
 ### 🚀 **Performance First**
-- **Concurrent copying** - Parallel operations for maximum throughput
-- **Copy-on-Write support** - Instant copies on Btrfs/XFS filesystems
-- **Linux optimizations** - Uses `copy_file_range` for kernel-level efficiency
-- **Smart buffering** - Adaptive buffer sizes based on file characteristics
+- 🚀 Fast parallel copying (2-4x faster than cp [benchmarks](docs/benchmarks.md))
+- 📊 Beautiful progress bars (customisable)
+- ⏸️ Resume interrupted transfers
+- 🎯 Exclude patterns (gitignore-style)
+- ⚙️ Flexible configuration
+- 🛑 Graceful Ctrl+C handling with resume hints
 
-See [benchmarks](docs/benchmarks.md) for detailed performance comparisons.
-
-### 📊 **Better User Experience**
-- **Progress bars** - Beautiful, real-time visual feedback (customisable via config)
-- **Resume capability** - Pick up interrupted transfers (with checksum verification)
-- **Interactive mode** - Confirm overwrites before they happen
-- **Detailed stats** - File count, speed, ETA, and more
-
-### 🎯 **Powerful & Flexible**
-- **Exclude patterns** - Skip files with gitignore-style globs
-- **Preserve attributes** - Maintain permissions, timestamps, ownership, xattr, SELinux context
-- **Backup modes** - Automatic versioning (simple, numbered, existing)
-- **Symlink handling** - Flexible symbolic and hard link support
-- **Configuration files** - Set project or system-wide defaults
-
-### 🛡️ **Reliable**
-- **Graceful interruption** - Clean Ctrl+C handling with partial file cleanup
-- **Error recovery** - Continue on errors with detailed reporting
-- **Checksum verification** - Resume mode validates file integrity
-- **Multiple backup strategies** - Never lose data on overwrites
 
 ## Installation
 
@@ -283,7 +265,7 @@ cargo run -- -r test_data/ test_dest/
 
 ## License
 
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+- MIT license
 
 
 ## Acknowledgments
