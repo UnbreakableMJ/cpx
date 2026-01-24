@@ -129,7 +129,7 @@ cpx -e "*.tmp" -e "node_modules" source/ dest/
 Control default copy behavior.
 ```toml
 [copy]
-concurrency = 4              # Number of concurrent copy operations
+parallel = 4              # Number of parallel copy operations
 recursive = false            # Copy directories recursively
 parents = false              # Use full source path under destination
 force = false                # Overwrite read-only destination files
@@ -141,7 +141,7 @@ remove_destination = false   # Remove destination before copying
 
 **Explanation:**
 
-- **`concurrency`**: Number of files copied in parallel (default: 4)
+- **`parallel`**: Number of files copied in parallel (default: 4)
   - Higher values = faster for many small files
   - Lower values = less resource usage
 
@@ -170,7 +170,7 @@ remove_destination = false   # Remove destination before copying
 ```toml
 [copy]
 recursive = true
-concurrency = 8
+parallel = 8
 ```
 
 ### Preserve Attributes
@@ -402,7 +402,7 @@ patterns = [
 
 # Copy operation settings
 [copy]
-concurrency = 4
+parallel = 4
 recursive = false
 parents = false
 force = false
@@ -469,7 +469,7 @@ patterns = [
 
 [copy]
 recursive = true
-concurrency = 8
+parallel = 8
 ```
 
 ### 2. Backup Solution
@@ -510,7 +510,7 @@ mode = "numbered"
 Maximum speed with minimal preservation:
 ```toml
 [copy]
-concurrency = 16
+parallel = 16
 recursive = true
 
 [preserve]

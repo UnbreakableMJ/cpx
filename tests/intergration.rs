@@ -187,7 +187,7 @@ fn test_copy_with_force_flag() {
 }
 
 #[test]
-fn test_copy_with_concurrency() {
+fn test_copy_with_parallel() {
     let temp = assert_fs::TempDir::new().unwrap();
     let dest_dir = temp.child("dest");
     dest_dir.create_dir_all().unwrap();

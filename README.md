@@ -110,7 +110,7 @@ Input/Output Options:
 
 Copy Behavior:
   -r, --recursive          Copy directories recursively
-  -j <N>                   Number of concurrent operations [default: 4]
+  -j <N>                   Number of parallel operations [default: 4]
       --resume             Resume interrupted transfers (checksum verified)
   -f, --force              Remove and retry if destination cannot be opened
   -i, --interactive        Prompt before overwrite
@@ -174,7 +174,7 @@ cpx config path
 patterns = ["*.tmp", "*.log", "node_modules", ".git"]
 
 [copy]
-concurrency = 8
+parallel = 8
 recursive = false
 
 [preserve]

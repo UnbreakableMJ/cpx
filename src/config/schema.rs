@@ -10,7 +10,7 @@ pub struct ExcludeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CopyConfig {
-    pub concurrency: usize,
+    pub parallel: usize,
     pub recursive: bool,
     pub parents: bool,
     pub force: bool,
@@ -84,7 +84,7 @@ pub struct Config {
 impl Default for CopyConfig {
     fn default() -> Self {
         Self {
-            concurrency: 4,
+            parallel: 4,
             recursive: false,
             parents: false,
             force: false,

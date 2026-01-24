@@ -169,7 +169,7 @@ fn execute_copy(plan: CopyPlan, options: &CopyOptions) -> CopyResult<()> {
         }
     } else {
         let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(options.concurrency)
+            .num_threads(options.parallel)
             .build()
             .map_err(|e| CopyError::CopyFailed {
                 source: PathBuf::new(),
@@ -479,7 +479,7 @@ mod tests {
             remove_destination: false,
             reflink: None,
             parents: false,
-            concurrency: 1,
+            parallel: 1,
             exclude_rules: None,
             progress_bar: ProgressOptions::default(),
             abort: Arc::new(AtomicBool::new(false)),

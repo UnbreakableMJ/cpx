@@ -57,7 +57,7 @@ cpx --remove-destination source.txt destination.txt
 # Basic recursive copy
 cpx -r source_dir/ destination_dir/
 
-# Copy with specific concurrency
+# Copy with specific parallel
 cpx -r -j 8 source_dir/ destination_dir/
 
 # Interactive recursive copy
@@ -418,10 +418,10 @@ cpx -r --attributes-only -p=mode template/ project/
 
 ### Maximize Throughput
 ```bash
-# Use high concurrency for many small files
+# Use high parallel for many small files
 cpx -r -j 16 many_small_files/ dest/
 
-# Use lower concurrency for large files
+# Use lower parallel for large files
 cpx -r -j 2 few_large_files/ dest/
 ```
 
@@ -433,7 +433,7 @@ cpx -r --reflink=auto -j 8 source/ dest/
 
 ### Network Copy Optimization
 ```bash
-# Lower concurrency, resume support
+# Lower parallel, resume support
 cpx -r -j 4 --resume /local/data/ /network/mount/data/
 ```
 
@@ -579,7 +579,7 @@ cpx -r \
 ```
 
 **Explanation:**
-- `-j 16`: High concurrency
+- `-j 16`: High parallel
 - `--resume`: Resume if interrupted
 - `--reflink=auto`: Use CoW if available
 - `-e`: Exclude large directories

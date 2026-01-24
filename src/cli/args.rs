@@ -96,9 +96,9 @@ pub struct CopyArgs {
     #[arg(
         short = 'j',
         default_value_t = 4,
-        help = "Number of concurrent copy operations for multiple files"
+        help = "Number of parallel copy operations for multiple files"
     )]
-    pub concurrency: usize,
+    pub parallel: usize,
 
     #[arg(long = "resume", help = "resume interrupted transfers")]
     pub resume: bool,
@@ -208,7 +208,7 @@ pub struct CopyArgs {
 #[derive(Debug, Clone)]
 pub struct CopyOptions {
     pub recursive: bool,
-    pub concurrency: usize,
+    pub parallel: usize,
     pub resume: bool,
     pub force: bool,
     pub interactive: bool,
@@ -230,7 +230,7 @@ impl CopyOptions {
     pub fn none() -> Self {
         Self {
             recursive: false,
-            concurrency: 4,
+            parallel: 4,
             resume: false,
             force: false,
             interactive: false,
@@ -252,7 +252,7 @@ impl CopyOptions {
     pub fn from_config(config: &Config) -> Self {
         Self {
             recursive: config.copy.recursive,
-            concurrency: config.copy.concurrency,
+            parallel: config.copy.parallel,
             resume: config.copy.resume,
             force: config.copy.force,
             interactive: config.copy.interactive,
@@ -277,7 +277,7 @@ impl From<&CopyArgs> for CopyOptions {
     fn from(cli: &CopyArgs) -> Self {
         Self {
             recursive: cli.recursive,
-            concurrency: cli.concurrency,
+            parallel: cli.parallel,
             resume: cli.resume,
             force: cli.force,
             interactive: cli.interactive,
@@ -427,7 +427,7 @@ fn apply_cli_overrides(options: &mut CopyOptions, copy_args: &CopyArgs) -> Resul
             .map_err(|e| format!("unable to parse preserve attribute: {}", e))?;
     }
 
-    options.concurrency = copy_args.concurrency;
+    options.parallel = copy_args.parallel;
 
     options.follow_symlink = copy_args.follow_symlink_mode()?;
 
@@ -524,7 +524,7 @@ mod tests {
                 destination: PathBuf::from("dest.txt"),
                 target_directory: None,
                 recursive: false,
-                concurrency: 4,
+                parallel: 4,
                 resume: false,
                 force: false,
                 interactive: false,
@@ -558,7 +558,7 @@ mod tests {
                 destination: PathBuf::from("dest.txt"),
                 target_directory: None,
                 recursive: false,
-                concurrency: 4,
+                parallel: 4,
                 resume: true,
                 force: false,
                 interactive: false,
@@ -592,7 +592,7 @@ mod tests {
                 destination: PathBuf::from("dest.txt"),
                 target_directory: None,
                 recursive: false,
-                concurrency: 4,
+                parallel: 4,
                 resume: true,
                 force: false,
                 interactive: false,
@@ -626,7 +626,7 @@ mod tests {
                 destination: PathBuf::from("dest.txt"),
                 target_directory: None,
                 recursive: false,
-                concurrency: 4,
+                parallel: 4,
                 resume: false,
                 force: false,
                 interactive: false,
