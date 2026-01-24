@@ -6,7 +6,9 @@
 
 [![Crates.io](https://img.shields.io/crates/v/cpx.svg)](https://crates.io/crates/cpx)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
-[![Build Status](https://github.com/yourusername/cpx/workflows/CI/badge.svg)](https://github.com/yourusername/cpx/actions)
+[![CI](https://github.com/11happy/cpx/actions/workflows/ci.yml/badge.svg)](
+https://github.com/11happy/cpx/actions/workflows/ci.yml
+)
 
 [Features](#features) •
 [Installation](#installation) •
