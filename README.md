@@ -56,7 +56,7 @@ cpx --version
 cargo install cpx
 ```
 
-### Pre-built Binaries (Coming Soon)
+### Pre-built Binaries
 
 Download from [Releases](https://github.com/11happy/cpx/releases)
 
