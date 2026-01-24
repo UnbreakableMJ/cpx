@@ -26,8 +26,6 @@ cpx -r projects/ /backup/
 Copying 51% ████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ETA:00:06
 ```
 ## Features
-
-### 🚀 **Performance First**
 - 🚀 Fast parallel copying (upto 5x faster than cp [benchmarks](docs/benchmarks.md))
 - 📊 Beautiful progress bars (customizable)
 - ⏸️ Resume interrupted transfers
