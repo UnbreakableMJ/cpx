@@ -5,6 +5,9 @@ use predicates::prelude::*;
 use std::fs;
 use std::process::Command;
 
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+
 #[test]
 fn test_copy_single_file() {
     let temp = assert_fs::TempDir::new().unwrap();
@@ -287,4 +290,782 @@ fn test_copy_large_file() {
 
     let dest_size = fs::metadata(dest.path()).unwrap().len();
     assert_eq!(dest_size, 5 * 1024 * 1024);
+}
+
+#[test]
+#[cfg(unix)]
+fn test_symlink_mode_auto_relative() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("source.txt");
+    let dest_dir = temp.child("dest");
+
+    source.write_str("content").unwrap();
+    dest_dir.create_dir_all().unwrap();
+
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp.path()).unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-s")
+        .arg("auto")
+        .arg("source.txt")
+        .arg("dest")
+        .assert()
+        .success();
+
+    let symlink_path = temp.child("dest/source.txt");
+    assert!(symlink_path.path().symlink_metadata().unwrap().is_symlink());
+
+    let target = fs::read_link(symlink_path.path()).unwrap();
+    assert!(!target.is_absolute());
+
+    std::env::set_current_dir(original_dir).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_symlink_mode_absolute() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("source.txt");
+    let dest_dir = temp.child("dest");
+
+    source.write_str("content").unwrap();
+    dest_dir.create_dir_all().unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-s")
+        .arg("absolute")
+        .arg(source.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    let symlink_path = dest_dir.child("source.txt");
+    let target = fs::read_link(symlink_path.path()).unwrap();
+    assert!(target.is_absolute());
+}
+
+#[test]
+#[cfg(unix)]
+fn test_symlink_directory_recursive() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source_dir = temp.child("source");
+    let dest_dir = temp.child("dest");
+
+    source_dir.create_dir_all().unwrap();
+    source_dir.child("file1.txt").write_str("content1").unwrap();
+    source_dir.child("file2.txt").write_str("content2").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-r")
+        .arg("-s")
+        .arg("relative")
+        .arg(source_dir.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    assert!(
+        dest_dir
+            .child("source/file1.txt")
+            .path()
+            .symlink_metadata()
+            .unwrap()
+            .is_symlink()
+    );
+    assert!(
+        dest_dir
+            .child("source/file2.txt")
+            .path()
+            .symlink_metadata()
+            .unwrap()
+            .is_symlink()
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn test_preserve_existing_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let temp = assert_fs::TempDir::new().unwrap();
+    let actual_file = temp.child("actual.txt");
+    let source_link = temp.child("source_link");
+    let dest_dir = temp.child("dest");
+
+    actual_file.write_str("actual content").unwrap();
+    dest_dir.create_dir_all().unwrap();
+
+    symlink(actual_file.path(), source_link.path()).unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-P") // no-dereference
+        .arg(source_link.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    let dest_link = dest_dir.child("source_link");
+    assert!(dest_link.path().symlink_metadata().unwrap().is_symlink());
+
+    let original_target = fs::read_link(source_link.path()).unwrap();
+    let copied_target = fs::read_link(dest_link.path()).unwrap();
+    assert_eq!(original_target, copied_target);
+}
+
+#[test]
+#[cfg(unix)]
+fn test_hardlink_single_file() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("source.txt");
+    let dest = temp.child("dest.txt");
+
+    source.write_str("content").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-l")
+        .arg(source.path())
+        .arg(dest.path())
+        .assert()
+        .success();
+
+    let source_meta = fs::metadata(source.path()).unwrap();
+    let dest_meta = fs::metadata(dest.path()).unwrap();
+
+    assert_eq!(source_meta.ino(), dest_meta.ino());
+    assert_eq!(source_meta.nlink(), 2);
+}
+
+#[test]
+#[cfg(unix)]
+fn test_hardlink_multiple_files() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let file1 = temp.child("file1.txt");
+    let file2 = temp.child("file2.txt");
+    let dest_dir = temp.child("dest");
+
+    file1.write_str("content1").unwrap();
+    file2.write_str("content2").unwrap();
+    dest_dir.create_dir_all().unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-l")
+        .arg(file1.path())
+        .arg(file2.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    let dest1_meta = fs::metadata(dest_dir.child("file1.txt").path()).unwrap();
+    let dest2_meta = fs::metadata(dest_dir.child("file2.txt").path()).unwrap();
+
+    assert_eq!(dest1_meta.nlink(), 2);
+    assert_eq!(dest2_meta.nlink(), 2);
+}
+
+#[test]
+#[cfg(unix)]
+fn test_preserve_hardlinks() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source_dir = temp.child("source");
+    let dest_dir = temp.child("dest");
+
+    source_dir.create_dir_all().unwrap();
+
+    let original = source_dir.child("original.txt");
+    original.write_str("content").unwrap();
+
+    let hardlink = source_dir.child("hardlink.txt");
+    fs::hard_link(original.path(), hardlink.path()).unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-r")
+        .arg("-p")
+        .arg("links")
+        .arg(source_dir.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    let dest_orig = dest_dir.child("source/original.txt");
+    let dest_link = dest_dir.child("source/hardlink.txt");
+
+    let orig_meta = fs::metadata(dest_orig.path()).unwrap();
+    let link_meta = fs::metadata(dest_link.path()).unwrap();
+
+    assert_eq!(orig_meta.ino(), link_meta.ino());
+    assert_eq!(orig_meta.nlink(), 2);
+}
+
+#[test]
+fn test_backup_simple() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("source.txt");
+    let dest = temp.child("dest.txt");
+
+    source.write_str("new content").unwrap();
+    dest.write_str("old content").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-b")
+        .arg("simple")
+        .arg(source.path())
+        .arg(dest.path())
+        .assert()
+        .success();
+
+    dest.assert("new content");
+    temp.child("dest.txt~").assert("old content");
+}
+
+#[test]
+fn test_backup_numbered() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("source.txt");
+    let dest = temp.child("dest.txt");
+
+    source.write_str("version 1").unwrap();
+    dest.write_str("version 0").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-b")
+        .arg("numbered")
+        .arg(source.path())
+        .arg(dest.path())
+        .assert()
+        .success();
+
+    temp.child("dest.txt.~1~").assert("version 0");
+
+    source.write_str("version 2").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-b")
+        .arg("numbered")
+        .arg(source.path())
+        .arg(dest.path())
+        .assert()
+        .success();
+
+    temp.child("dest.txt.~2~").assert("version 1");
+}
+
+#[test]
+fn test_backup_existing_mode() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("source.txt");
+    let dest = temp.child("dest.txt");
+
+    source.write_str("new").unwrap();
+    dest.write_str("old").unwrap();
+
+    // First backup with existing mode (no numbered backups exist)
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-b")
+        .arg("existing")
+        .arg(source.path())
+        .arg(dest.path())
+        .assert()
+        .success();
+
+    temp.child("dest.txt~").assert("old");
+
+    // Create a numbered backup manually
+    fs::write(temp.child("dest.txt.~1~").path(), "numbered").unwrap();
+
+    source.write_str("newer").unwrap();
+    dest.write_str("new").unwrap();
+
+    // Now it should use numbered
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-b")
+        .arg("existing")
+        .arg(source.path())
+        .arg(dest.path())
+        .assert()
+        .success();
+
+    temp.child("dest.txt.~2~").assert("new");
+}
+
+#[test]
+#[cfg(unix)]
+fn test_preserve_mode() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("source.txt");
+    let dest = temp.child("dest.txt");
+
+    source.write_str("content").unwrap();
+
+    let mut perms = fs::metadata(source.path()).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(source.path(), perms).unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-p")
+        .arg("mode")
+        .arg(source.path())
+        .arg(dest.path())
+        .assert()
+        .success();
+
+    let dest_mode = fs::metadata(dest.path()).unwrap().permissions().mode() & 0o777;
+    assert_eq!(dest_mode, 0o755);
+}
+
+#[test]
+fn test_preserve_timestamps() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("source.txt");
+    let dest = temp.child("dest.txt");
+
+    source.write_str("content").unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-p")
+        .arg("timestamps")
+        .arg(source.path())
+        .arg(dest.path())
+        .assert()
+        .success();
+
+    let src_mtime = fs::metadata(source.path()).unwrap().modified().unwrap();
+    let dest_mtime = fs::metadata(dest.path()).unwrap().modified().unwrap();
+
+    let diff = if src_mtime > dest_mtime {
+        src_mtime.duration_since(dest_mtime).unwrap()
+    } else {
+        dest_mtime.duration_since(src_mtime).unwrap()
+    };
+
+    assert!(diff.as_secs() < 2);
+}
+
+#[test]
+fn test_attributes_only() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("source.txt");
+    let dest = temp.child("dest.txt");
+
+    source.write_str("source content").unwrap();
+    dest.write_str("dest content").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("--attributes-only")
+        .arg(source.path())
+        .arg(dest.path())
+        .assert()
+        .success();
+
+    // Content should not change
+    dest.assert("dest content");
+}
+
+#[test]
+fn test_exclude_basename() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source_dir = temp.child("source");
+    let dest_dir = temp.child("dest");
+
+    source_dir.create_dir_all().unwrap();
+    source_dir.child("file1.txt").write_str("keep").unwrap();
+
+    let node_modules = source_dir.child("node_modules");
+    node_modules.create_dir_all().unwrap();
+    node_modules.child("lib.js").write_str("exclude").unwrap();
+
+    dest_dir.create_dir_all().unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-r")
+        .arg("-e")
+        .arg("node_modules")
+        .arg(source_dir.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    dest_dir.child("source/file1.txt").assert("keep");
+    assert!(!dest_dir.child("source/node_modules").path().exists());
+}
+#[test]
+fn test_exclude_glob_pattern() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source_dir = temp.child("source");
+    let dest_dir = temp.child("dest");
+
+    source_dir.create_dir_all().unwrap();
+    source_dir.child("file.txt").write_str("keep").unwrap();
+    source_dir.child("temp.tmp").write_str("exclude").unwrap();
+    source_dir.child("cache.tmp").write_str("exclude").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-r")
+        .arg("-e")
+        .arg("*.tmp")
+        .arg(source_dir.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    dest_dir.child("source/file.txt").assert("keep");
+    assert!(!dest_dir.child("source/temp.tmp").path().exists());
+    assert!(!dest_dir.child("source/cache.tmp").path().exists());
+}
+
+#[test]
+fn test_exclude_multiple_patterns() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source_dir = temp.child("source");
+    let dest_dir = temp.child("dest");
+
+    source_dir.create_dir_all().unwrap();
+    source_dir.child("keep.txt").write_str("keep").unwrap();
+    source_dir.child("file.tmp").write_str("exclude").unwrap();
+    source_dir.child("file.log").write_str("exclude").unwrap();
+    source_dir.child(".git").create_dir_all().unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-r")
+        .arg("-e")
+        .arg("*.tmp,*.log,.git")
+        .arg(source_dir.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    dest_dir.child("source/keep.txt").assert("keep");
+    assert!(!dest_dir.child("source/file.tmp").path().exists());
+    assert!(!dest_dir.child("source/file.log").path().exists());
+    assert!(!dest_dir.child("source/.git").path().exists());
+}
+
+#[test]
+fn test_exclude_relative_path() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source_dir = temp.child("source");
+    let dest_dir = temp.child("dest");
+
+    source_dir.create_dir_all().unwrap();
+    source_dir.child("subdir").create_dir_all().unwrap();
+    source_dir
+        .child("subdir/keep.txt")
+        .write_str("keep")
+        .unwrap();
+    source_dir
+        .child("subdir/exclude.txt")
+        .write_str("exclude")
+        .unwrap();
+    source_dir.child("other.txt").write_str("keep").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-r")
+        .arg("-e")
+        .arg("subdir/exclude.txt")
+        .arg(source_dir.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    dest_dir.child("source/subdir/keep.txt").assert("keep");
+    dest_dir.child("source/other.txt").assert("keep");
+    assert!(!dest_dir.child("source/subdir/exclude.txt").path().exists());
+}
+
+#[test]
+fn test_parents_flag() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source_dir = temp.child("a/b/c");
+    let dest_dir = temp.child("dest");
+
+    source_dir.create_dir_all().unwrap();
+    let source_file = source_dir.child("file.txt");
+    source_file.write_str("content").unwrap();
+    dest_dir.create_dir_all().unwrap();
+
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp.path()).unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("--parents")
+        .arg("a/b/c/file.txt")
+        .arg("dest")
+        .assert()
+        .success();
+
+    temp.child("dest/a/b/c/file.txt").assert("content");
+
+    std::env::set_current_dir(original_dir).unwrap();
+}
+
+#[test]
+fn test_parents_multiple_files() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let dest_dir = temp.child("dest");
+    dest_dir.create_dir_all().unwrap();
+
+    let file1_dir = temp.child("dir1/sub1");
+    file1_dir.create_dir_all().unwrap();
+    let file1 = file1_dir.child("file1.txt");
+    file1.write_str("content1").unwrap();
+
+    let file2_dir = temp.child("dir2/sub2");
+    file2_dir.create_dir_all().unwrap();
+    let file2 = file2_dir.child("file2.txt");
+    file2.write_str("content2").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("--parents")
+        .arg(file1.path())
+        .arg(file2.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    dest_dir.child("dir1/sub1/file1.txt").assert("content1");
+    dest_dir.child("dir2/sub2/file2.txt").assert("content2");
+}
+
+#[test]
+#[cfg(unix)]
+fn test_dereference_command_line() {
+    use std::os::unix::fs::symlink;
+
+    let temp = assert_fs::TempDir::new().unwrap();
+    let actual_dir = temp.child("actual");
+    actual_dir.create_dir_all().unwrap();
+    actual_dir.child("file.txt").write_str("content").unwrap();
+
+    let symlink_dir = temp.child("link");
+    symlink(actual_dir.path(), symlink_dir.path()).unwrap();
+
+    let dest_dir = temp.child("dest");
+    dest_dir.create_dir_all().unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-r")
+        .arg("-H")
+        .arg(symlink_dir.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    // The symlink is dereferenced, so contents are copied
+    dest_dir.child("link/file.txt").assert("content");
+}
+
+#[test]
+#[cfg(unix)]
+fn test_dereference_always() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let actual = temp.child("actual.txt");
+    actual.write_str("content").unwrap();
+
+    let source_dir = temp.child("source");
+    source_dir.create_dir_all().unwrap();
+
+    let link = source_dir.child("link.txt");
+    symlink(actual.path(), link.path()).unwrap();
+
+    let dest_dir = temp.child("dest");
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-r")
+        .arg("-L")
+        .arg(source_dir.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    let dest_file = dest_dir.child("source/link.txt");
+    assert!(!dest_file.path().symlink_metadata().unwrap().is_symlink());
+    dest_file.assert("content");
+}
+
+#[test]
+fn test_symlink_hardlink_conflict() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("source.txt");
+    let dest = temp.child("dest.txt");
+
+    source.write_str("content").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-s")
+        .arg("-l")
+        .arg(source.path())
+        .arg(dest.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("symbolic-link").and(predicate::str::contains("link")));
+}
+
+#[test]
+fn test_symlink_resume_conflict() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("source.txt");
+    let dest = temp.child("dest.txt");
+
+    source.write_str("content").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-s")
+        .arg("--resume")
+        .arg(source.path())
+        .arg(dest.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("continue"));
+}
+
+#[test]
+fn test_dereference_flags_conflict() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("source.txt");
+    let dest = temp.child("dest.txt");
+
+    source.write_str("content").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-P")
+        .arg("-L")
+        .arg(source.path())
+        .arg(dest.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("only one"));
+}
+
+#[test]
+fn test_copy_empty_file() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("empty.txt");
+    let dest = temp.child("empty_copy.txt");
+
+    source.write_str("").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg(source.path())
+        .arg(dest.path())
+        .assert()
+        .success();
+
+    assert_eq!(fs::metadata(dest.path()).unwrap().len(), 0);
+}
+
+#[test]
+fn test_copy_to_existing_directory() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("source.txt");
+    let dest_dir = temp.child("dest");
+
+    source.write_str("content").unwrap();
+    dest_dir.create_dir_all().unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg(source.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    dest_dir.child("source.txt").assert("content");
+}
+
+#[test]
+fn test_copy_directory_to_file_fails() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source_dir = temp.child("source");
+    let dest_file = temp.child("dest.txt");
+
+    source_dir.create_dir_all().unwrap();
+    dest_file.write_str("existing").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-r")
+        .arg(source_dir.path())
+        .arg(dest_file.path())
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_copy_special_characters_in_filename() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("file with spaces & special!.txt");
+    let dest_dir = temp.child("dest");
+
+    source.write_str("content").unwrap();
+    dest_dir.create_dir_all().unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg(source.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    dest_dir
+        .child("file with spaces & special!.txt")
+        .assert("content");
+}
+
+#[test]
+fn test_copy_nested_directories() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source_dir = temp.child("a/b/c/d/e");
+    let dest_dir = temp.child("dest");
+
+    source_dir.create_dir_all().unwrap();
+    source_dir
+        .child("deep.txt")
+        .write_str("deep content")
+        .unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("-r")
+        .arg(temp.child("a").path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    dest_dir.child("a/b/c/d/e/deep.txt").assert("deep content");
+}
+
+#[test]
+fn test_remove_destination_flag() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let source = temp.child("source.txt");
+    let dest = temp.child("dest.txt");
+
+    source.write_str("new").unwrap();
+    dest.write_str("old").unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg("--remove-destination")
+        .arg(source.path())
+        .arg(dest.path())
+        .assert()
+        .success();
+
+    dest.assert("new");
+}
+
+#[test]
+fn test_copy_very_long_filename() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let long_name = "a".repeat(200) + ".txt";
+    let source = temp.child(&long_name);
+    let dest_dir = temp.child("dest");
+
+    source.write_str("content").unwrap();
+    dest_dir.create_dir_all().unwrap();
+
+    Command::new(cargo::cargo_bin!("cpx"))
+        .arg(source.path())
+        .arg(dest_dir.path())
+        .assert()
+        .success();
+
+    dest_dir.child(&long_name).assert("content");
 }

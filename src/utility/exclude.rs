@@ -104,11 +104,26 @@ pub fn build_exclude_rules(patterns: Vec<ExcludePattern>) -> ExcludeResult<Optio
 }
 
 pub fn should_exclude(path: &Path, source_root: &Path, rules: &ExcludeRules) -> bool {
+    // Check basename of the path itself
     if let Some(name) = path.file_name().and_then(|n| n.to_str())
         && rules.basenames.contains(name)
     {
         return true;
     }
+
+    // Check if any parent directory (between source_root and path) has an excluded basename
+    // This ensures that files inside excluded directories are also excluded
+    let relative = path.strip_prefix(source_root).unwrap_or(path);
+    for component in relative.components() {
+        if let std::path::Component::Normal(os_str) = component
+            && let Some(name) = os_str.to_str()
+            && rules.basenames.contains(name)
+        {
+            return true;
+        }
+    }
+
+    // Check absolute paths
     if !rules.absolute_paths.is_empty() {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         for excluded in &rules.absolute_paths {
@@ -120,6 +135,8 @@ pub fn should_exclude(path: &Path, source_root: &Path, rules: &ExcludeRules) -> 
             }
         }
     }
+
+    // Check glob patterns
     if let Some(glob_set) = &rules.glob_set {
         let relative = path.strip_prefix(source_root).unwrap_or(path);
         let mut rel_str: Cow<str> = relative.to_string_lossy();
@@ -181,12 +198,14 @@ mod exclude_tests {
             .unwrap()
             .unwrap();
         let rules_ref = &rules;
+
         assert!(should_exclude(
             file_path.parent().unwrap(),
             temp_dir.path(),
             rules_ref
         ));
-        assert!(!should_exclude(&file_path, temp_dir.path(), rules_ref)); // only parent folder excluded
+
+        assert!(should_exclude(&file_path, temp_dir.path(), rules_ref));
     }
 
     #[test]

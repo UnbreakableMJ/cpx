@@ -362,7 +362,8 @@ pub fn preprocess_directory(
     options: &CopyOptions,
 ) -> CopyResult<CopyPlan> {
     let mut plan = CopyPlan::new();
-    if let Some(exclude_rules) = &options.exclude_rules
+    if source != source_root
+        && let Some(exclude_rules) = &options.exclude_rules
         && should_exclude(source, source_root, exclude_rules)
     {
         return Ok(plan);
@@ -377,13 +378,11 @@ pub fn preprocess_directory(
         };
 
     plan.add_directory(Some(source.into()), root_destination.clone());
-
     let num_threads = num_cpus::get().min(8);
     let follow_symlink = match options.follow_symlink {
         FollowSymlink::NoDereference | FollowSymlink::CommandLineSymlink => false,
         FollowSymlink::Dereference => true,
     };
-
     let walk_root = match options.follow_symlink {
         FollowSymlink::CommandLineSymlink => {
             let meta = std::fs::symlink_metadata(source)?;
@@ -399,7 +398,7 @@ pub fn preprocess_directory(
         }
         _ => source.to_path_buf(),
     };
-
+    let mut inode_groups = None;
     for entry in WalkDir::new(&walk_root)
         .skip_hidden(false)
         .parallelism(jwalk::Parallelism::RayonNewPool(num_threads))
@@ -415,7 +414,6 @@ pub fn preprocess_directory(
         if src_path == source {
             continue;
         }
-
         let relative = src_path
             .strip_prefix(source)
             .map_err(|_| CopyError::CopyFailed {
@@ -439,7 +437,6 @@ pub fn preprocess_directory(
         if metadata.is_dir() {
             plan.add_directory(Some(src_path.to_path_buf()), dest_path);
         } else {
-            let mut inode_groups = None;
             process_entry(
                 &mut plan,
                 &src_path,
@@ -451,7 +448,6 @@ pub fn preprocess_directory(
             )?;
         }
     }
-
     plan.sort_files_descending();
     Ok(plan)
 }
