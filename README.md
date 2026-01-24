@@ -43,17 +43,28 @@ Copying 51% ██████████████████████�
 - **Linux** (kernel 4.5+ recommended for fast copy)
 - **Rust** 1.70 or later
 
+
+### Quick Install (Recommended)
+```bash
+curl -fsSL https://raw.githubusercontent.com/11happy/cpx/main/install.sh | bash
+```
+
+Or with wget:
+```bash
+wget -qO- https://raw.githubusercontent.com/11happy/cpx/main/install.sh | bash
+```
+
+### From Crates.io
+```bash
+cargo install cpx
+```
+
 ### From Source
 ```bash
 git clone https://github.com/11happy/cpx.git
 cd cpx
 cargo install --path .
 cpx --version
-```
-
-### From Crates.io
-```bash
-cargo install cpx
 ```
 
 ### Pre-built Binaries
