@@ -9,13 +9,13 @@ use crate::utility::helper::{
 use crate::utility::preprocess::{
     CopyPlan, preprocess_directory, preprocess_file, preprocess_multiple,
 };
-use crate::utility::preserve::{self, PreserveAttr};
+use crate::utility::preserve::{self, HardLinkTracker, PreserveAttr};
 use crate::utility::progress_bar::ProgressBarStyle;
 use indicatif::ProgressBar;
 use rayon::prelude::*;
 use std::io::{self, Read, Write};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::{path::Path, path::PathBuf};
 
 pub fn copy(source: &Path, destination: &Path, options: &CopyOptions) -> CopyResult<()> {
@@ -144,6 +144,13 @@ fn execute_copy(plan: CopyPlan, options: &CopyOptions) -> CopyResult<()> {
 
     let completed_files = Arc::new(AtomicUsize::new(0));
 
+    // Initialize hard link tracker if preserve.links is enabled
+    let hardlink_tracker = if options.preserve.links {
+        Some(Arc::new(Mutex::new(HardLinkTracker::new())))
+    } else {
+        None
+    };
+
     // For interactive mode, process sequentially
     if options.interactive {
         for file_task in plan.files {
@@ -155,6 +162,7 @@ fn execute_copy(plan: CopyPlan, options: &CopyOptions) -> CopyResult<()> {
                 &completed_files,
                 plan.total_files,
                 options,
+                hardlink_tracker.as_ref(),
             )?;
         }
     } else {
@@ -179,6 +187,7 @@ fn execute_copy(plan: CopyPlan, options: &CopyOptions) -> CopyResult<()> {
                         &completed_files,
                         plan.total_files,
                         options,
+                        hardlink_tracker.as_ref(),
                     )
                 })
                 .collect()
@@ -238,6 +247,7 @@ fn execute_copy(plan: CopyPlan, options: &CopyOptions) -> CopyResult<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn copy_core(
     source: &Path,
     destination: &Path,
@@ -246,6 +256,7 @@ fn copy_core(
     completed_files: &AtomicUsize,
     total_files: usize,
     options: &CopyOptions,
+    hardlink_tracker: Option<&Arc<Mutex<HardLinkTracker>>>,
 ) -> CopyResult<()> {
     if options.attributes_only {
         if std::fs::symlink_metadata(destination).is_err() {
@@ -272,6 +283,24 @@ fn copy_core(
 
     if options.remove_destination {
         let _ = std::fs::remove_file(destination);
+    }
+
+    // Handle hard link preservation
+    if let Some(tracker) = hardlink_tracker {
+        let mut tracker_guard = tracker.lock().map_err(|_| {
+            CopyError::Io(io::Error::other("Failed to acquire hardlink tracker lock"))
+        })?;
+
+        if tracker_guard.track_and_create_link(source, destination)? {
+            // Hard link was created, no need to copy file content
+            update_progress(overall_pb, completed_files, total_files, options);
+            if options.preserve != PreserveAttr::none() {
+                preserve::apply_preserve_attrs(source, destination, options.preserve)
+                    .map_err(CopyError::from)?;
+            }
+            return Ok(());
+        }
+        // Continue with normal file copy if this is the first file in the inode group
     }
 
     if let Some(reflink_mode) = options.reflink {

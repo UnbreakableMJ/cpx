@@ -3,6 +3,7 @@ use super::helper::with_parents;
 use crate::cli::args::{CopyOptions, FollowSymlink, SymlinkMode};
 use crate::error::{CopyError, CopyResult};
 use jwalk::WalkDir;
+use std::collections::HashMap;
 use std::fs::Metadata;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ pub struct FileTask {
     pub source: PathBuf,
     pub destination: PathBuf,
     pub size: u64,
+    pub inode_group: Option<u64>, // For tracking hard link groups
 }
 
 #[derive(Debug, Clone)]
@@ -78,10 +80,21 @@ impl CopyPlan {
     }
 
     pub fn add_file(&mut self, source: PathBuf, destination: PathBuf, size: u64) {
+        self.add_file_with_inode(source, destination, size, None);
+    }
+
+    pub fn add_file_with_inode(
+        &mut self,
+        source: PathBuf,
+        destination: PathBuf,
+        size: u64,
+        inode_group: Option<u64>,
+    ) {
         self.files.push(FileTask {
             source,
             destination,
             size,
+            inode_group,
         });
         self.total_size += size;
         self.total_files += 1;
@@ -197,12 +210,47 @@ fn process_entry(
     dest_path: PathBuf,
     metadata: &Metadata,
     options: &CopyOptions,
+    inode_groups: &mut Option<HashMap<u64, Vec<PathBuf>>>,
 ) -> io::Result<()> {
     if let Some(exclude_rules) = &options.exclude_rules
         && should_exclude(source, source_root, exclude_rules)
     {
         return Ok(());
     }
+
+    // Handle hard link preservation
+    let inode_group = if options.preserve.links && cfg!(unix) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let inode = metadata.ino();
+            let nlink = metadata.nlink();
+
+            // Only track if this is part of a hard link set (nlink > 1)
+            if nlink > 1 {
+                if inode_groups.is_none() {
+                    *inode_groups = Some(HashMap::new());
+                }
+
+                let groups = inode_groups.as_mut().unwrap();
+                let group_id = inode;
+
+                groups.entry(group_id).or_default();
+                groups.get_mut(&group_id).unwrap().push(dest_path.clone());
+
+                Some(group_id)
+            } else {
+                None
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    } else {
+        None
+    };
+
     if metadata.file_type().is_symlink() {
         if !matches!(options.follow_symlink, FollowSymlink::Dereference) {
             if let Some(mode) = options.symbolic_link {
@@ -221,7 +269,7 @@ fn process_entry(
     } else if options.resume && should_skip_file(source, &dest_path)? {
         plan.mark_skipped(metadata.len());
     } else {
-        plan.add_file(source.to_path_buf(), dest_path, metadata.len());
+        plan.add_file_with_inode(source.to_path_buf(), dest_path, metadata.len(), inode_group);
     }
     Ok(())
 }
@@ -289,6 +337,7 @@ pub fn preprocess_file(
         plan.add_directory(None, parent.to_path_buf());
     }
 
+    let mut inode_groups = None;
     process_entry(
         &mut plan,
         source,
@@ -296,6 +345,7 @@ pub fn preprocess_file(
         dest_path.clone(),
         &source_metadata,
         options,
+        &mut inode_groups,
     )
     .map_err(|e| CopyError::CopyFailed {
         source: source.to_path_buf(),
@@ -389,7 +439,16 @@ pub fn preprocess_directory(
         if metadata.is_dir() {
             plan.add_directory(Some(src_path.to_path_buf()), dest_path);
         } else {
-            process_entry(&mut plan, &src_path, source, dest_path, &metadata, options)?;
+            let mut inode_groups = None;
+            process_entry(
+                &mut plan,
+                &src_path,
+                source,
+                dest_path,
+                &metadata,
+                options,
+                &mut inode_groups,
+            )?;
         }
     }
 
@@ -453,6 +512,7 @@ pub fn preprocess_multiple(
                 plan.add_directory(None, parent.to_path_buf());
             }
 
+            let mut inode_groups = None;
             process_entry(
                 &mut plan,
                 source,
@@ -460,6 +520,7 @@ pub fn preprocess_multiple(
                 dest_path.clone(),
                 &metadata,
                 options,
+                &mut inode_groups,
             )
             .map_err(|e| CopyError::CopyFailed {
                 source: source.to_path_buf(),
