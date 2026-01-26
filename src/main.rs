@@ -36,7 +36,6 @@ fn main() {
             for sig in signals.forever() {
                 match sig {
                     SIGINT | SIGTERM => {
-                        eprintln!("\nInterrupt received — stopping gracefully...");
                         abort.store(true, Ordering::Relaxed);
                     }
                     _ => unreachable!(),
@@ -60,7 +59,7 @@ fn main() {
             if abort.load(Ordering::Relaxed) {
                 eprintln!("\nOperation interrupted");
                 eprintln!("Resume with: cpx --resume [original command]");
-                eprintln!("Completed files will be skipped automatically)");
+                eprintln!("Completed files will be skipped automatically");
                 process::exit(130); // Standard exit code for SIGINT
             } else {
                 eprintln!("Error copying file: {}", e);

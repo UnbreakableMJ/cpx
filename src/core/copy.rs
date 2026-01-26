@@ -217,14 +217,10 @@ fn execute_copy(plan: CopyPlan, options: &CopyOptions) -> CopyResult<()> {
         }
 
         if interrupted {
-            if let Some(pb) = overall_pb {
-                pb.abandon_with_message("Interrupted — partial files cleaned");
-            }
-
             let completed = completed_files.load(Ordering::Relaxed);
-            eprintln!("\nOperation interrupted by user");
-            eprintln!("  Completed:  {} files", completed);
-            eprintln!("  Remaining:  {} files", plan.total_files - completed);
+
+            eprintln!("\nCompleted:  {} files", completed);
+            eprintln!("Remaining:  {} files", plan.total_files - completed);
 
             return Err(CopyError::Io(io::Error::new(
                 io::ErrorKind::Interrupted,
