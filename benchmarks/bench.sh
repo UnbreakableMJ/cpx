@@ -17,6 +17,7 @@ NC='\033[0m'
 BENCH_DIR="/home/happy/cpx_multi_bench"
 REPOS_DIR="$BENCH_DIR/repos"
 CPX_PATH="/home/happy/cpx/cpx"   # adjust if needed
+# CPX_PATH_TEMP = "/.cargo/bin/cpx"
 THREADS=16
 RUNS=6
 
