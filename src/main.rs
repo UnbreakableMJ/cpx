@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 fn main() {
-    // Use the custom parser instead of CLIArgs::parse()
+    // custom parser
     let args = CLIArgs::parse();
 
     let (sources, destination, mut options) = match args.validate() {
@@ -52,15 +52,15 @@ fn main() {
 
     match result {
         Ok(_) => {
-            // Success - normal exit
+            // normal
         }
         Err(e) => {
-            // Check if interrupted
+            // interrupt check
             if abort.load(Ordering::Relaxed) {
                 eprintln!("\nOperation interrupted");
                 eprintln!("Resume with: cpx --resume [original command]");
                 eprintln!("Completed files will be skipped automatically");
-                process::exit(130); // Standard exit code for SIGINT
+                process::exit(130); // SIGINT
             } else {
                 eprintln!("Error copying file: {}", e);
                 process::exit(1);
