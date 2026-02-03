@@ -83,6 +83,17 @@ impl CopyPlan {
         self.add_file_with_inode(source, destination, size, None);
     }
 
+    // last source wins, if multiple sources collide prevents symlink write-through
+    fn remove_existing_task(&mut self, dest: &Path) {
+        self.symlinks.retain(|t| t.destination != dest);
+        self.hardlinks.retain(|t| t.destination != dest);
+
+        if let Some(pos) = self.files.iter().position(|t| t.destination == dest) {
+            let removed = self.files.remove(pos);
+            self.total_size -= removed.size;
+            self.total_files -= 1;
+        }
+    }
     pub fn add_file_with_inode(
         &mut self,
         source: PathBuf,
@@ -90,6 +101,7 @@ impl CopyPlan {
         size: u64,
         inode_group: Option<u64>,
     ) {
+        self.remove_existing_task(&destination);
         self.files.push(FileTask {
             source,
             destination,
@@ -108,6 +120,7 @@ impl CopyPlan {
     }
 
     pub fn add_symlink(&mut self, source: PathBuf, destination: PathBuf, kind: SymlinkKind) {
+        self.remove_existing_task(&destination);
         self.symlinks.push(SymlinkTask {
             source,
             destination,
@@ -117,6 +130,7 @@ impl CopyPlan {
     }
 
     pub fn add_hardlink(&mut self, source: PathBuf, destination: PathBuf) {
+        self.remove_existing_task(&destination);
         self.hardlinks.push(HardlinkTask {
             source,
             destination,
